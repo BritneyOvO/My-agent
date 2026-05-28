@@ -1,0 +1,51 @@
+tools:
+  file:
+    command: ["file"]
+    risk: low
+    requires_scope: false
+    timeout: 20
+  strings:
+    command: ["strings"]
+    risk: low
+    requires_scope: false
+    timeout: 20
+  readelf:
+    command: ["readelf", "-a"]
+    risk: low
+    requires_scope: false
+    timeout: 20
+  objdump:
+    command: ["objdump", "-d"]
+    risk: low
+    requires_scope: false
+    timeout: 30
+  exiftool:
+    command: ["exiftool"]
+    risk: low
+    requires_scope: false
+    timeout: 20
+  binwalk:
+    command: ["binwalk"]
+    risk: low
+    requires_scope: false
+    timeout: 60
+  tshark_summary:
+    command: ["tshark", "-r"]
+    risk: low
+    requires_scope: false
+    timeout: 60
+  whatweb_safe:
+    command: ["whatweb", "--no-errors"]
+    risk: medium
+    requires_scope: true
+    timeout: 60
+  nmap_safe:
+    command: ["nmap", "-sV", "--top-ports", "100"]
+    risk: medium
+    requires_scope: true
+    timeout: 120
+  ffuf_safe:
+    command: ["ffuf"]
+    risk: medium
+    requires_scope: true
+    timeout: 120

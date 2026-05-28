@@ -1,0 +1,15 @@
+allowed_targets:
+  - type: host
+    value: "127.0.0.1"
+    mode: "local_lab"
+  - type: host
+    value: "localhost"
+    mode: "local_lab"
+blocked_targets:
+  - "0.0.0.0/0"
+  - "::/0"
+require_confirmation_for:
+  - network_scans
+  - exploit_validation
+  - brute_force_like_ctf_tasks
+  - sql_injection_testing

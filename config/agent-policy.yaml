@@ -1,0 +1,41 @@
+name: z3gh0ne
+allowed_categories:
+  - ctf_challenge
+  - local_lab
+  - owned_asset_authorized_test
+  - code_review
+  - log_analysis
+  - report_generation
+  - safe_explanation
+blocked_categories:
+  - dos
+  - ddos
+  - stress_test_real_target
+  - mass_targeting
+  - internet_wide_scan
+  - persistence
+  - stealth
+  - evasion
+  - credential_stuffing
+  - password_spraying
+  - phishing
+  - malware_deployment
+  - data_destruction
+  - unauthorized_access
+  - third_party_exploitation
+blocked_keywords:
+  - ddos
+  - dos attack
+  - stress test
+  - botnet
+  - persistence
+  - bypass detection
+  - evade detection
+  - credential stuffing
+  - password spraying
+  - phishing
+  - malware
+  - ransomware
+  - scan the internet
+  - mass scan
+  - backdoor
