@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { env } from "../lib/env.ts";
-import { PolicyGate } from "../core/policy.ts";
-import { ScopeValidator } from "../core/scope.ts";
-import { ToolRegistry } from "./registry.ts";
-import type { ToolRunRequest } from "../types/tool.ts";
+import { env } from "../lib/env.js";
+import { PolicyGate } from "../core/policy.js";
+import { ScopeValidator } from "../core/scope.js";
+import { ToolRegistry } from "./registry.js";
+import type { ToolRunRequest } from "../types/tool.js";
 
 const dangerousArgPattern = /[;&|`$]|\.\.\/|\/etc\/|\/proc\/|\/sys\//;
 const maxOutput = 20000;
@@ -96,6 +96,9 @@ export class ToolDispatcher {
 
     const timeout = Number(meta.timeout ?? 30);
     const [binary, ...args] = command;
+    if (!binary) {
+      return this.error("invalid_tool", "tool command is empty");
+    }
 
     try {
       const result = spawnSync(binary, args, {
@@ -108,7 +111,7 @@ export class ToolDispatcher {
           return this.error("timeout", `tool exceeded ${timeout}s timeout`);
         }
         if (/ENOENT/.test(result.error.message)) {
-          return this.error("tool_not_found", "binary not available in container");
+          return this.error("tool_not_found", "binary not available in local runtime");
         }
         return this.error("exec_error", result.error.message.slice(0, 200));
       }
@@ -126,7 +129,7 @@ export class ToolDispatcher {
         return this.error("timeout", `tool exceeded ${timeout}s timeout`);
       }
       if (error instanceof Error && /ENOENT/.test(error.message)) {
-        return this.error("tool_not_found", "binary not available in container");
+        return this.error("tool_not_found", "binary not available in local runtime");
       }
       return this.error("exec_error", error instanceof Error ? error.message.slice(0, 200) : "unknown exec error");
     }

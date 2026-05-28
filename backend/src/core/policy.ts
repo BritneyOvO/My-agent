@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { env } from "../lib/env.ts";
-import { parsePolicyYaml } from "../lib/yaml.ts";
+import { env } from "../lib/env.js";
+import { parsePolicyYaml } from "../lib/yaml.js";
 
 type PolicyConfig = {
   allowed_categories?: string[];

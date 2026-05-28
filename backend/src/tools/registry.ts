@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { env } from "../lib/env.ts";
-import { parseToolRegistryYaml } from "../lib/yaml.ts";
+import { env } from "../lib/env.js";
+import { parseToolRegistryYaml } from "../lib/yaml.js";
 
 export type ToolMeta = {
   command: string[];

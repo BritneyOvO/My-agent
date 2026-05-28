@@ -1,8 +1,8 @@
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { env } from "../lib/env.ts";
-import { ensureDir } from "../lib/fs.ts";
+import { env } from "../lib/env.js";
+import { ensureDir } from "../lib/fs.js";
 
 const sensitiveKeys = new Set(["authorization", "token", "password", "api_key", "anthropic_api_key"]);
 

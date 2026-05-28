@@ -47,7 +47,14 @@ export const taskRequestSchema = {
     const owner = readOptionalString(body.owner, "owner", 1, 120);
     const priority = readEnum(body.priority ?? "medium", ["low", "medium", "high", "critical"] as const, "priority");
     const tags = readStringArray(body.tags ?? [], "tags", 100, 80);
-    return defined({ mode, prompt, target, owner, priority, tags });
+    const result: TaskRequest = { mode, prompt, priority, tags };
+    if (target !== undefined) {
+      result.target = target;
+    }
+    if (owner !== undefined) {
+      result.owner = owner;
+    }
+    return result;
   }
 };
 
@@ -56,7 +63,11 @@ export const taskStatusUpdateSchema = {
     const body = requireObject(input);
     const status = readEnum(body.status, taskStatuses, "status");
     const comment = readOptionalString(body.comment, "comment", 1, 4000);
-    return defined({ status, comment });
+    const result: TaskStatusUpdate = { status };
+    if (comment !== undefined) {
+      result.comment = comment;
+    }
+    return result;
   }
 };
 
@@ -106,8 +117,4 @@ function readStringArray(input: unknown, field: string, maxItems: number, maxLen
     throw new Error(`${field} cannot contain more than ${maxItems} items`);
   }
   return input.map((item) => readString(item, field, 1, maxLength));
-}
-
-function defined<T extends Record<string, unknown>>(value: T) {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
 }

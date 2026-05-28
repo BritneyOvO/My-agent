@@ -2,13 +2,13 @@ import path from "node:path";
 import { appendFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import type { AppInstance } from "../server.ts";
-import { env } from "../lib/env.ts";
-import { ensureDir } from "../lib/fs.ts";
-import { HttpError, parseOrThrow } from "../lib/http.ts";
-import { requireToken } from "../core/auth.ts";
-import { audit } from "../core/audit.ts";
-import { channels, hubMessageSchema } from "../types/hub.ts";
+import type { AppInstance } from "../server.js";
+import { env } from "../lib/env.js";
+import { ensureDir } from "../lib/fs.js";
+import { HttpError, parseOrThrow } from "../lib/http.js";
+import { requireToken } from "../core/auth.js";
+import { audit } from "../core/audit.js";
+import { channels, hubMessageSchema } from "../types/hub.js";
 
 export function registerHubRoutes(app: AppInstance) {
   app.get("/hub/info", async (request) => {
@@ -91,6 +91,9 @@ export function registerHubRoutes(app: AppInstance) {
     const messages: Array<Record<string, unknown>> = [];
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       const line = lines[index];
+      if (!line) {
+        continue;
+      }
       try {
         const parsed = JSON.parse(line) as Record<string, unknown>;
         if (sender && parsed.from !== sender) {

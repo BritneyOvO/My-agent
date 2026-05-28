@@ -1,9 +1,9 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import type { AppInstance } from "../server.ts";
-import { env } from "../lib/env.ts";
-import { requireToken } from "../core/auth.ts";
-import { HttpError } from "../lib/http.ts";
+import type { AppInstance } from "../server.js";
+import { env } from "../lib/env.js";
+import { requireToken } from "../core/auth.js";
+import { HttpError } from "../lib/http.js";
 
 export function registerReportRoutes(app: AppInstance) {
   app.get("/reports/:taskId", async (request, reply) => {

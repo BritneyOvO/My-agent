@@ -1,5 +1,5 @@
-import type { AppInstance } from "../server.ts";
-import { env } from "../lib/env.ts";
+import type { AppInstance } from "../server.js";
+import { env } from "../lib/env.js";
 
 export function registerHealthRoutes(app: AppInstance) {
   app.get("/health", async () => ({

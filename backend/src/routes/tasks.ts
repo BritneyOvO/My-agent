@@ -1,13 +1,13 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AppInstance } from "../server.ts";
-import { env } from "../lib/env.ts";
-import { HttpError, parseOrThrow } from "../lib/http.ts";
-import { ensureDir, readJsonFile, writeJsonFile } from "../lib/fs.ts";
-import { requireToken } from "../core/auth.ts";
-import { PolicyGate } from "../core/policy.ts";
-import { audit } from "../core/audit.ts";
-import { taskCommentSchema, taskRequestSchema, taskStatusUpdateSchema, type TaskRequest } from "../types/task.ts";
+import type { AppInstance } from "../server.js";
+import { env } from "../lib/env.js";
+import { HttpError, parseOrThrow } from "../lib/http.js";
+import { ensureDir, readJsonFile, writeJsonFile } from "../lib/fs.js";
+import { requireToken } from "../core/auth.js";
+import { PolicyGate } from "../core/policy.js";
+import { audit } from "../core/audit.js";
+import { taskCommentSchema, taskRequestSchema, taskStatusUpdateSchema, type TaskRequest } from "../types/task.js";
 
 type TaskHistoryEntry = {
   ts: string;

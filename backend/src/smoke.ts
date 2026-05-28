@@ -2,8 +2,8 @@ const port = Number.parseInt(process.env.PORT ?? "18080", 10);
 const token = process.env.Z3GH0NE_ADMIN_TOKEN ?? "test-token";
 process.env.Z3GH0NE_ADMIN_TOKEN = token;
 
-const { env } = await import("./lib/env.ts");
-const { buildServer } = await import("./server.ts");
+const { env } = await import("./lib/env.js");
+const { buildServer } = await import("./server.js");
 
 const server = buildServer();
 await server.listen({ host: "127.0.0.1", port });
@@ -36,7 +36,7 @@ try {
 }
 
 async function getJson(url: string, headers?: Record<string, string>) {
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, headers ? { headers } : undefined);
   return readJsonResponse(response);
 }
 

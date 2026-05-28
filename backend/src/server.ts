@@ -1,10 +1,10 @@
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { registerHealthRoutes } from "./routes/health.ts";
-import { registerTaskRoutes } from "./routes/tasks.ts";
-import { registerReportRoutes } from "./routes/reports.ts";
-import { registerToolRoutes } from "./routes/tools.ts";
-import { registerHubRoutes } from "./routes/hub.ts";
+import { registerHealthRoutes } from "./routes/health.js";
+import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerReportRoutes } from "./routes/reports.js";
+import { registerToolRoutes } from "./routes/tools.js";
+import { registerHubRoutes } from "./routes/hub.js";
 
 type Method = "GET" | "POST" | "PATCH";
 type Params = Record<string, string>;

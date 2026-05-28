@@ -16,7 +16,7 @@ export function parsePolicyYaml(text: string) {
       continue;
     }
     if (section && line.trim().startsWith("- ")) {
-      result[section]?.push(parseScalar(line.trim().slice(2)).toString());
+      result[section]?.push(String(parseScalar(line.trim().slice(2))));
     }
   }
 
@@ -92,14 +92,18 @@ export function parseToolRegistryYaml(text: string) {
       const [rawKey, ...rawValueParts] = trimmed.split(":");
       const key = rawKey?.trim();
       const value = parseScalar(rawValueParts.join(":").trim());
+      const tool = result.tools[currentTool];
+      if (!tool) {
+        continue;
+      }
       if (key === "command") {
-        result.tools[currentTool].command = Array.isArray(value) ? value.map(String) : [String(value)];
+        tool.command = Array.isArray(value) ? value.map(String) : [String(value)];
       } else if (key === "requires_scope") {
-        result.tools[currentTool].requires_scope = Boolean(value);
+        tool.requires_scope = Boolean(value);
       } else if (key === "timeout") {
-        result.tools[currentTool].timeout = Number(value);
+        tool.timeout = Number(value);
       } else if (key === "risk") {
-        result.tools[currentTool].risk = String(value);
+        tool.risk = String(value);
       }
     }
   }

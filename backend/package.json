@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --experimental-strip-types src/index.ts",
-    "build": "node --experimental-strip-types --check src/index.ts",
-    "start": "node --experimental-strip-types src/index.ts",
-    "typecheck": "node --experimental-strip-types --check src/index.ts",
-    "smoke": "node --experimental-strip-types src/smoke.ts"
+    "dev": "npm run build && node --watch dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke": "npm run build && node dist/smoke.js"
   }
 }

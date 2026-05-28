@@ -1,6 +1,6 @@
-import type { RequestContext } from "../server.ts";
-import { env } from "../lib/env.ts";
-import { HttpError } from "../lib/http.ts";
+import type { RequestContext } from "../server.js";
+import { env } from "../lib/env.js";
+import { HttpError } from "../lib/http.js";
 
 export function requireToken(request: RequestContext) {
   if (!env.adminToken) {

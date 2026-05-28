@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import net from "node:net";
-import { env } from "../lib/env.ts";
-import { parseScopeYaml } from "../lib/yaml.ts";
+import { env } from "../lib/env.js";
+import { parseScopeYaml } from "../lib/yaml.js";
 
 type AllowedTarget = {
   type?: "host" | "cidr";

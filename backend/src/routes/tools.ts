@@ -1,10 +1,10 @@
-import type { AppInstance } from "../server.ts";
-import { requireToken } from "../core/auth.ts";
-import { audit } from "../core/audit.ts";
-import { parseOrThrow } from "../lib/http.ts";
-import { toolRunRequestSchema } from "../types/tool.ts";
-import { ToolRegistry } from "../tools/registry.ts";
-import { ToolDispatcher } from "../tools/dispatcher.ts";
+import type { AppInstance } from "../server.js";
+import { requireToken } from "../core/auth.js";
+import { audit } from "../core/audit.js";
+import { parseOrThrow } from "../lib/http.js";
+import { toolRunRequestSchema } from "../types/tool.js";
+import { ToolRegistry } from "../tools/registry.js";
+import { ToolDispatcher } from "../tools/dispatcher.js";
 
 export function registerToolRoutes(app: AppInstance) {
   app.get("/tools", async (request) => {

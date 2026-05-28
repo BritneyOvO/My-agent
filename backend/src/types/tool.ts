@@ -14,7 +14,14 @@ export const toolRunRequestSchema = {
     const target = readOptionalString(body.target, "target", 1, 4000);
     const artifactPath = readOptionalString(body.artifact_path, "artifact_path", 1, 260);
     const args = readStringArray(body.args ?? [], "args", 8, 500);
-    return defined({ tool, mode, target, artifact_path: artifactPath, args });
+    const result: ToolRunRequest = { tool, mode, args };
+    if (target !== undefined) {
+      result.target = target;
+    }
+    if (artifactPath !== undefined) {
+      result.artifact_path = artifactPath;
+    }
+    return result;
   }
 };
 
@@ -50,8 +57,4 @@ function readStringArray(input: unknown, field: string, maxItems: number, maxLen
     throw new Error(`${field} cannot contain more than ${maxItems} items`);
   }
   return input.map((item) => readString(item, field, 0, maxLength));
-}
-
-function defined<T extends Record<string, unknown>>(value: T) {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
 }
