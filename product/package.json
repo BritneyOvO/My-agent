@@ -1,0 +1,10 @@
+{
+  "name": "z3gh0ne-product",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --experimental-strip-types --check src/index.ts",
+    "typecheck": "node --experimental-strip-types --check src/index.ts"
+  }
+}

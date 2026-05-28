@@ -1,0 +1,14 @@
+node_modules/
+package-lock.json
+.npm-cache/
+.npm-cache2/
+dist/
+__pycache__/
+*.pyc
+.runtime-data/
+.runtime-logs/
+runtime-logs/
+data/tasks/
+data/uploads/
+data/workspaces/
+logs/
