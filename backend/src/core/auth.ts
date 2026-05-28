@@ -1,6 +1,6 @@
 import type { FastifyRequest } from "fastify";
-import { env } from "../lib/env.js";
-import { HttpError } from "../lib/http.js";
+import { env } from "../lib/env.ts";
+import { HttpError } from "../lib/http.ts";
 
 export function requireToken(request: FastifyRequest) {
   if (!env.adminToken) {

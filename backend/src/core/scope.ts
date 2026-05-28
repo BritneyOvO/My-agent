@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import net from "node:net";
-import YAML from "yaml";
-import { env } from "../lib/env.js";
+import { env } from "../lib/env.ts";
+import { parseScopeYaml } from "../lib/yaml.ts";
 
 type AllowedTarget = {
   type?: "host" | "cidr";
@@ -19,7 +19,7 @@ export class ScopeValidator {
 
   constructor() {
     const filePath = path.join(env.configDir, "allowed-scopes.yaml");
-    this.config = YAML.parse(readFileSync(filePath, "utf8")) as ScopeConfig;
+    this.config = parseScopeYaml(readFileSync(filePath, "utf8")) as ScopeConfig;
   }
 
   normalizeHost(target: string) {

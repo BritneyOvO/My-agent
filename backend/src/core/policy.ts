@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
-import { env } from "../lib/env.js";
+import { env } from "../lib/env.ts";
+import { parsePolicyYaml } from "../lib/yaml.ts";
 
 type PolicyConfig = {
   allowed_categories?: string[];
@@ -14,7 +14,7 @@ export class PolicyGate {
 
   constructor() {
     const filePath = path.join(env.configDir, "agent-policy.yaml");
-    this.config = YAML.parse(readFileSync(filePath, "utf8")) as PolicyConfig;
+    this.config = parsePolicyYaml(readFileSync(filePath, "utf8")) as PolicyConfig;
     this.blockedKeywords = (this.config.blocked_keywords ?? []).map((item) => item.toLowerCase());
   }
 

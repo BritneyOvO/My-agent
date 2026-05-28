@@ -1,15 +1,15 @@
 import path from "node:path";
 import { appendFile, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import type { FastifyInstance } from "fastify";
-import { env } from "../lib/env.js";
-import { ensureDir } from "../lib/fs.js";
-import { HttpError, parseOrThrow } from "../lib/http.js";
-import { requireToken } from "../core/auth.js";
-import { audit } from "../core/audit.js";
-import { channels, hubMessageSchema } from "../types/hub.js";
+import type { AppInstance } from "../server.ts";
+import { env } from "../lib/env.ts";
+import { ensureDir } from "../lib/fs.ts";
+import { HttpError, parseOrThrow } from "../lib/http.ts";
+import { requireToken } from "../core/auth.ts";
+import { audit } from "../core/audit.ts";
+import { channels, hubMessageSchema } from "../types/hub.ts";
 
-export function registerHubRoutes(app: FastifyInstance) {
+export function registerHubRoutes(app: AppInstance) {
   app.get("/hub/info", async (request) => {
     const user = requireToken(request);
     return {

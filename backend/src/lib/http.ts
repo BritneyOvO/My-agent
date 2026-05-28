@@ -1,18 +1,23 @@
-import { ZodError, type ZodSchema } from "zod";
-
 export class HttpError extends Error {
-  constructor(public readonly statusCode: number, message: string) {
+  readonly statusCode: number;
+
+  constructor(statusCode: number, message: string) {
     super(message);
+    this.statusCode = statusCode;
   }
 }
 
-export function parseOrThrow<T>(schema: ZodSchema<T>, input: unknown): T {
+export type Parser<T> = {
+  parse(input: unknown): T;
+};
+
+export function parseOrThrow<T>(parser: Parser<T>, input: unknown): T {
   try {
-    return schema.parse(input);
+    return parser.parse(input);
   } catch (error) {
-    if (error instanceof ZodError) {
-      throw new HttpError(422, error.issues.map((issue) => issue.message).join("; "));
+    if (error instanceof HttpError) {
+      throw error;
     }
-    throw error;
+    throw new HttpError(422, error instanceof Error ? error.message : "invalid request body");
   }
 }

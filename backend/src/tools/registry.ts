@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
-import { env } from "../lib/env.js";
+import { env } from "../lib/env.ts";
+import { parseToolRegistryYaml } from "../lib/yaml.ts";
 
 export type ToolMeta = {
   command: string[];
@@ -19,7 +19,7 @@ export class ToolRegistry {
 
   constructor() {
     const filePath = path.join(env.configDir, "tool-registry.yaml");
-    const raw = YAML.parse(readFileSync(filePath, "utf8")) as ToolRegistryConfig;
+    const raw = parseToolRegistryYaml(readFileSync(filePath, "utf8")) as ToolRegistryConfig;
     this.tools = raw.tools ?? {};
   }
 

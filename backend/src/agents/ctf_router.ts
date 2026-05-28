@@ -1,1 +1,1 @@
-export { result } from "./base.js";
+export { result } from "./base.ts";

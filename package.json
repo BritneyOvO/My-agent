@@ -1,0 +1,20 @@
+{
+  "name": "ctf-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TypeScript workspace for the z3gh0ne hub/backend refactor.",
+  "workspaces": [
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace backend",
+    "build": "npm run build --workspace backend",
+    "start": "npm run start --workspace backend",
+    "typecheck": "npm run typecheck --workspace backend"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bygeee/My-agent.git"
+  },
+  "license": "ISC"
+}

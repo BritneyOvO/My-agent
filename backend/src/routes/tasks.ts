@@ -1,15 +1,56 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { env } from "../lib/env.js";
-import { HttpError, parseOrThrow } from "../lib/http.js";
-import { ensureDir, readJsonFile, writeJsonFile } from "../lib/fs.js";
-import { requireToken } from "../core/auth.js";
-import { PolicyGate } from "../core/policy.js";
-import { audit } from "../core/audit.js";
-import { taskCommentSchema, taskRequestSchema, taskStatusUpdateSchema, type TaskRequest } from "../types/task.js";
+import type { AppInstance } from "../server.ts";
+import { env } from "../lib/env.ts";
+import { HttpError, parseOrThrow } from "../lib/http.ts";
+import { ensureDir, readJsonFile, writeJsonFile } from "../lib/fs.ts";
+import { requireToken } from "../core/auth.ts";
+import { PolicyGate } from "../core/policy.ts";
+import { audit } from "../core/audit.ts";
+import { taskCommentSchema, taskRequestSchema, taskStatusUpdateSchema, type TaskRequest } from "../types/task.ts";
 
-type StoredTask = ReturnType<typeof buildTaskRecord>;
+type TaskHistoryEntry = {
+  ts: string;
+  action: string;
+  by: string;
+  from?: string;
+  to?: string;
+  comment?: string;
+  path?: string;
+};
+
+type TaskCommentEntry = {
+  id: string;
+  ts: string;
+  by: string;
+  text: string;
+};
+
+type TaskArtifactEntry = {
+  id: string;
+  ts: string;
+  by: string;
+  path: string;
+  label: string;
+};
+
+type StoredTask = {
+  task_id: string;
+  status: string;
+  mode: string;
+  prompt: string;
+  target: string | null;
+  owner: string;
+  priority: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  history: TaskHistoryEntry[];
+  comments: TaskCommentEntry[];
+  artifacts: TaskArtifactEntry[];
+  result: Record<string, unknown> | null;
+};
 
 function tasksDir() {
   return path.join(env.dataDir, "tasks");
@@ -49,13 +90,13 @@ function buildTaskRecord(req: TaskRequest, user: string) {
     updated_at: now,
     created_by: user,
     history: [{ ts: now, action: "created", by: user }],
-    comments: [] as Array<Record<string, string>>,
-    artifacts: [] as Array<Record<string, string>>,
-    result: null as Record<string, unknown> | null
-  };
+    comments: [],
+    artifacts: [],
+    result: null
+  } satisfies StoredTask;
 }
 
-export function registerTaskRoutes(app: FastifyInstance) {
+export function registerTaskRoutes(app: AppInstance) {
   app.post("/tasks", async (request) => {
     const user = requireToken(request);
     const req = parseOrThrow(taskRequestSchema, request.body);
@@ -147,7 +188,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const oldStatus = task.status;
     task.status = req.status;
     task.updated_at = now;
-    const entry: Record<string, string> = {
+    const entry: TaskHistoryEntry = {
       ts: now,
       action: "status_change",
       by: user,
