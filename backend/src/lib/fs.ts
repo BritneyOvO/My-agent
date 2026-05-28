@@ -1,17 +1,17 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export async function ensureDir(dirPath: string) {
-  await mkdir(dirPath, { recursive: true });
+  mkdirSync(dirPath, { recursive: true });
   return dirPath;
 }
 
 export async function readJsonFile<T>(filePath: string): Promise<T> {
-  const content = await readFile(filePath, "utf8");
+  const content = readFileSync(filePath, "utf8");
   return JSON.parse(content) as T;
 }
 
 export async function writeJsonFile(filePath: string, value: unknown) {
   await ensureDir(path.dirname(filePath));
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }

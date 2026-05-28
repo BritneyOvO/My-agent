@@ -1,4 +1,4 @@
-import { appendFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { env } from "../lib/env.ts";
@@ -33,6 +33,6 @@ export async function audit(event: string, payload: Record<string, unknown>) {
   };
   const auditDir = path.join(env.logDir, "audit");
   await ensureDir(auditDir);
-  await appendFile(path.join(auditDir, "audit.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
+  appendFileSync(path.join(auditDir, "audit.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
   return requestId;
 }

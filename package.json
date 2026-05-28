@@ -4,13 +4,15 @@
   "private": true,
   "description": "TypeScript workspace for the z3gh0ne hub/backend refactor.",
   "workspaces": [
-    "backend"
+    "backend",
+    "product"
   ],
   "scripts": {
     "dev": "npm run dev --workspace backend",
-    "build": "npm run build --workspace backend",
+    "build": "npm run build --workspaces --if-present",
     "start": "npm run start --workspace backend",
-    "typecheck": "npm run typecheck --workspace backend"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "smoke": "npm run smoke --workspace backend"
   },
   "repository": {
     "type": "git",

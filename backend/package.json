@@ -7,6 +7,7 @@
     "dev": "node --watch --experimental-strip-types src/index.ts",
     "build": "node --experimental-strip-types --check src/index.ts",
     "start": "node --experimental-strip-types src/index.ts",
-    "typecheck": "node --experimental-strip-types --check src/index.ts"
+    "typecheck": "node --experimental-strip-types --check src/index.ts",
+    "smoke": "node --experimental-strip-types src/smoke.ts"
   }
 }

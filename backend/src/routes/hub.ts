@@ -1,5 +1,6 @@
 import path from "node:path";
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { AppInstance } from "../server.ts";
 import { env } from "../lib/env.ts";
@@ -61,7 +62,7 @@ export function registerHubRoutes(app: AppInstance) {
     };
     const dirPath = path.join(env.dataDir, "hub", req.channel);
     await ensureDir(dirPath);
-    await appendFile(path.join(dirPath, "messages.jsonl"), `${JSON.stringify(message)}\n`, "utf8");
+    appendFileSync(path.join(dirPath, "messages.jsonl"), `${JSON.stringify(message)}\n`, "utf8");
     await audit("hub_message", { user, channel: req.channel, message_id: message.id });
     return message;
   });

@@ -1,4 +1,4 @@
-import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { registerHealthRoutes } from "./routes/health.ts";
 import { registerTaskRoutes } from "./routes/tasks.ts";
@@ -58,6 +58,7 @@ type Route = {
 
 export class AppInstance {
   private readonly routes: Route[] = [];
+  private server: Server | null = null;
   readonly log = {
     error: (error: unknown) => console.error(error)
   };
@@ -81,10 +82,28 @@ export class AppInstance {
         sendJson(response, 500, { detail: "internal server error" }, {});
       });
     });
+    this.server = server;
 
     return new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(options.port, options.host, () => resolve());
+    });
+  }
+
+  close() {
+    return new Promise<void>((resolve, reject) => {
+      if (!this.server) {
+        resolve();
+        return;
+      }
+      this.server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        this.server = null;
+        resolve();
+      });
     });
   }
 
