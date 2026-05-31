@@ -14,3 +14,8 @@ data/workspaces/
 logs/
 .external/
 data/hub/
+backend/match_backend/.pytest_cache/
+backend/match_backend/.runtime/
+backend/match_backend/.sessions/
+backend/match_backend/downloads/
+backend/match_backend/work/

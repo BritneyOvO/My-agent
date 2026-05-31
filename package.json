@@ -12,7 +12,9 @@
     "build": "npm run build --workspaces --if-present",
     "start": "npm run start --workspace backend",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "smoke": "npm run smoke --workspace backend"
+    "smoke": "npm run smoke --workspace backend",
+    "match:test": "cd backend/match_backend && python3 -m unittest -v",
+    "match:api": "cd backend/match_backend && python3 -m ctf_platforms.server"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

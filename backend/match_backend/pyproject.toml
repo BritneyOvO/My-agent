@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctf-platform-manager"
+version = "0.1.0"
+description = "Unified Java-like interface framework for CTF platform automation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+
+[project.scripts]
+ctf-platform = "ctf_platforms.cli:main"
+ctf-platform-api = "ctf_platforms.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ctf_platforms*"]
