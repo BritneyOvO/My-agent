@@ -12,3 +12,5 @@ data/tasks/
 data/uploads/
 data/workspaces/
 logs/
+.external/
+data/hub/

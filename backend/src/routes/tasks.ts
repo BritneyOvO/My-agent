@@ -1,9 +1,9 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AppInstance } from "../server.js";
-import { env } from "../lib/env.js";
 import { HttpError, parseOrThrow } from "../lib/http.js";
 import { ensureDir, readJsonFile, writeJsonFile } from "../lib/fs.js";
+import { taskFilePath, tasksDir } from "../lib/task-path.js";
 import { requireToken } from "../core/auth.js";
 import { PolicyGate } from "../core/policy.js";
 import { audit } from "../core/audit.js";
@@ -52,12 +52,8 @@ type StoredTask = {
   result: Record<string, unknown> | null;
 };
 
-function tasksDir() {
-  return path.join(env.dataDir, "tasks");
-}
-
 async function loadTask(taskId: string) {
-  const filePath = path.join(tasksDir(), `${taskId}.json`);
+  const filePath = taskFilePath(taskId);
   try {
     return await readJsonFile<StoredTask>(filePath);
   } catch {
@@ -67,7 +63,7 @@ async function loadTask(taskId: string) {
 
 async function saveTask(task: StoredTask) {
   await ensureDir(tasksDir());
-  await writeJsonFile(path.join(tasksDir(), `${task.task_id}.json`), task);
+  await writeJsonFile(taskFilePath(task.task_id), task);
 }
 
 function nowIso() {
