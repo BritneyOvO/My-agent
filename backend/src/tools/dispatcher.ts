@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { env } from "../lib/env.js";
+import { readAiConfig } from "../lib/ai-config.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolRunRequest } from "../types/tool.js";
 
@@ -22,6 +23,7 @@ type ToolResult = {
   tool?: string;
   exit_code?: number | null;
   output?: string;
+  raw?: Record<string, unknown>;
   truncated?: boolean;
   timeout_used?: number;
 };
@@ -53,6 +55,10 @@ export class ToolDispatcher {
     const meta = this.registry.get(request.tool);
     if (!meta) {
       return this.error("unknown_tool", `tool '${request.tool}' not found in registry`);
+    }
+
+    if (request.tool === "web_search") {
+      return this.runWebSearch(request, Number(meta.timeout ?? 45));
     }
 
     if (meta.requires_target) {
@@ -145,4 +151,143 @@ export class ToolDispatcher {
       return this.error("exec_error", error instanceof Error ? error.message.slice(0, 200) : "unknown exec error");
     }
   }
+
+  private async runWebSearch(request: ToolRunRequest, timeout: number): Promise<ToolResult> {
+    const query = request.query?.trim() || request.target?.trim() || request.args.join(" ").trim();
+    if (!query) {
+      return this.error("query_missing", "web_search requires query, target, or args");
+    }
+
+    const config = await readAiConfig();
+    if (config.provider !== "openai") {
+      return this.error("unsupported_provider", `web_search currently supports openai/codex Responses providers only; current provider=${config.provider}`);
+    }
+    if (!config.api_key) {
+      return this.error("api_key_missing", "AI API key is not configured");
+    }
+
+    const baseUrl = config.base_url.replace(/\/+$/, "");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1000, timeout * 1000));
+    try {
+      const tools: Array<Record<string, unknown>> = [{ type: "web_search" }];
+      if (request.allowed_domains?.length) {
+        tools[0]!.filters = { allowed_domains: request.allowed_domains };
+      }
+      if (request.blocked_domains?.length) {
+        tools[0]!.filters = { blocked_domains: request.blocked_domains };
+      }
+
+      const response = await fetch(`${baseUrl}/responses`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${config.api_key}`,
+          "Content-Type": "application/json",
+          ...(config.organization ? { "OpenAI-Organization": config.organization } : {})
+        },
+        body: JSON.stringify({
+          model: config.model,
+          input: [
+            "Use web search for the query below.",
+            "Return a concise answer and include relevant source URLs.",
+            "",
+            `Query: ${query}`
+          ].join("\n"),
+          tools,
+          tool_choice: "auto",
+          max_output_tokens: 1200,
+          store: false
+        })
+      });
+      const text = await response.text();
+      const data = parseJsonRecord(text);
+      if (!response.ok) {
+        return this.error("web_search_api_error", `Responses API ${response.status}: ${text.slice(0, 1000)}`);
+      }
+
+      const answer = extractResponseText(data);
+      const searchCalls = extractSearchCalls(data);
+      const sources = extractUrls(answer);
+      const output = [
+        `Web search query: ${query}`,
+        searchCalls.length ? `Search calls: ${searchCalls.join("; ")}` : "",
+        "",
+        answer || "<empty answer>",
+        sources.length ? `\nSources:\n${sources.map((url) => `- ${url}`).join("\n")}` : ""
+      ].filter(Boolean).join("\n");
+
+      return {
+        allowed: true,
+        tool: request.tool,
+        exit_code: 0,
+        output,
+        raw: compactWebSearchRaw(data),
+        truncated: false,
+        timeout_used: timeout
+      };
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return this.error("timeout", `web_search exceeded ${timeout}s timeout`);
+      }
+      return this.error("web_search_error", error instanceof Error ? error.message.slice(0, 500) : "unknown web_search error");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function parseJsonRecord(text: string) {
+  try {
+    const parsed = text ? JSON.parse(text) as unknown : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return { raw_text: text };
+  }
+}
+
+function contentToText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(contentToText).join("");
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return contentToText(record.text ?? record.content ?? record.value);
+  }
+  return "";
+}
+
+function extractResponseText(data: Record<string, unknown>) {
+  const direct = contentToText(data.output_text);
+  if (direct.trim()) return direct.trim();
+  return contentToText(data.output).trim();
+}
+
+function extractSearchCalls(data: Record<string, unknown>) {
+  const output = Array.isArray(data.output) ? data.output as Record<string, unknown>[] : [];
+  return output
+    .filter((item) => String(item.type ?? "") === "web_search_call")
+    .map((item) => {
+      const action = item.action && typeof item.action === "object" ? item.action as Record<string, unknown> : {};
+      return String(action.query ?? (Array.isArray(action.queries) ? action.queries.join(", ") : "")).trim();
+    })
+    .filter(Boolean);
+}
+
+function extractUrls(text: string) {
+  return Array.from(new Set(Array.from(text.matchAll(/https?:\/\/[^\s)>\]]+/g)).map((match) => match[0] ?? ""))).filter(Boolean);
+}
+
+function compactWebSearchRaw(data: Record<string, unknown>) {
+  return {
+    status: data.status,
+    output: Array.isArray(data.output)
+      ? (data.output as Record<string, unknown>[]).map((item) => ({
+        type: item.type,
+        status: item.status,
+        action: item.action,
+        content: item.content
+      }))
+      : undefined,
+    usage: data.usage
+  };
 }

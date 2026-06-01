@@ -26,6 +26,7 @@ export class ToolRegistry {
   private commandAvailable(command: string[]) {
     const binary = command[0];
     if (!binary) return false;
+    if (binary.startsWith("__builtin_")) return true;
     if (binary.includes("/")) return existsSync(binary);
     const paths = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
     return paths.some((dir) => existsSync(path.join(dir, binary)));

@@ -52,6 +52,9 @@ type ToolRequest = {
   tool: string;
   target?: string;
   artifact_path?: string;
+  query?: string;
+  allowed_domains?: string[];
+  blocked_domains?: string[];
   args: string[];
   call_id?: string;
   source?: string;
@@ -184,8 +187,9 @@ function systemPrompt() {
     "7. r2 是 radare2 包装工具：artifact_path 指向二进制；args 是 r2 命令列表，例如 [\"aaa\",\"iI\",\"afl\",\"pdf @ main\",\"izz\"]；不传 args 时默认输出 iI/afl/izz。",
     "8. python 用于执行短 Python 代码或上传的 .py 脚本：短代码使用 args=[\"-c\", \"代码\"]；上传脚本使用 artifact_path。优先编写可复现的小脚本处理编码、解密、数据转换和附件分析。",
     "9. curl/whatweb/nmap/ffuf 是网络工具：必须提供 target，且不要把 target 重复放进 args。curl 用于 HTTP 探测、带 Header/API 请求和查看响应头体。",
-    "10. 如果工具失败，基于错误反思并换路径；不要重复同样失败调用。",
-    "11. 一次最多规划少量有依赖关系的工具调用。",
+    "10. web_search 用于搜索公网最新资料：优先传 query 字段，例如 {\"tool\":\"web_search\",\"query\":\"OpenAI Responses web search docs 2026\"}；需要限制域名时可传 allowed_domains 或 blocked_domains。",
+    "11. 如果工具失败，基于错误反思并换路径；不要重复同样失败调用。",
+    "12. 一次最多规划少量有依赖关系的工具调用。",
   ].join("\n");
 }
 
@@ -228,10 +232,16 @@ function normalizeToolRequest(value: unknown, source = "json"): ToolRequest | nu
     const argsRecord = rawArgs as Record<string, unknown>;
     if (typeof argsRecord.target === "string") record.target = argsRecord.target;
     if (typeof argsRecord.artifact_path === "string") record.artifact_path = argsRecord.artifact_path;
+    if (typeof argsRecord.query === "string") record.query = argsRecord.query;
+    if (Array.isArray(argsRecord.allowed_domains)) record.allowed_domains = argsRecord.allowed_domains;
+    if (Array.isArray(argsRecord.blocked_domains)) record.blocked_domains = argsRecord.blocked_domains;
     if (typeof argsRecord.content === "string") request.args.push(argsRecord.content);
   }
   if (typeof record.target === "string" && record.target.trim()) request.target = record.target.trim();
   if (typeof record.artifact_path === "string" && record.artifact_path.trim()) request.artifact_path = record.artifact_path.trim();
+  if (typeof record.query === "string" && record.query.trim()) request.query = record.query.trim();
+  if (Array.isArray(record.allowed_domains)) request.allowed_domains = parseStringArray(record.allowed_domains);
+  if (Array.isArray(record.blocked_domains)) request.blocked_domains = parseStringArray(record.blocked_domains);
   if (typeof record.call_id === "string" && record.call_id.trim()) request.call_id = record.call_id.trim();
   return sanitizeToolRequest(request);
 }
@@ -243,6 +253,9 @@ function sanitizeToolRequest(request: ToolRequest): ToolRequest | null {
       tool: "__invalid_tool_request__",
       args: request.args,
       ...(request.target ? { target: request.target } : {}),
+      ...(request.query ? { query: request.query } : {}),
+      ...(request.allowed_domains?.length ? { allowed_domains: request.allowed_domains } : {}),
+      ...(request.blocked_domains?.length ? { blocked_domains: request.blocked_domains } : {}),
       ...(request.source ? { source: request.source } : {}),
       ...(request.call_id ? { call_id: request.call_id } : {}),
       ...(request.artifact_path ? { artifact_path: request.artifact_path } : {})
@@ -252,11 +265,12 @@ function sanitizeToolRequest(request: ToolRequest): ToolRequest | null {
   if (meta.requires_target && cleaned.target) {
     cleaned.args = cleaned.args.filter((arg) => arg !== cleaned.target);
   }
-  if (!meta.requires_target && cleaned.target && isNetworkTarget(cleaned.target) && !cleaned.artifact_path) {
+  if (request.tool !== "web_search" && !meta.requires_target && cleaned.target && isNetworkTarget(cleaned.target) && !cleaned.artifact_path) {
     return {
       tool: "__invalid_tool_request__",
       args: [],
       target: cleaned.target,
+      ...(cleaned.query ? { query: cleaned.query } : {}),
       ...(cleaned.source ? { source: cleaned.source } : {}),
       ...(cleaned.call_id ? { call_id: cleaned.call_id } : {}),
       ...(cleaned.artifact_path ? { artifact_path: cleaned.artifact_path } : {})
@@ -424,6 +438,9 @@ async function runRequestedTool(task: StoredTask, request: ToolRequest): Promise
   };
   if (request.target) runRequest.target = request.target;
   if (request.artifact_path) runRequest.artifact_path = request.artifact_path;
+  if (request.query) runRequest.query = request.query;
+  if (request.allowed_domains) runRequest.allowed_domains = request.allowed_domains;
+  if (request.blocked_domains) runRequest.blocked_domains = request.blocked_domains;
   const result = await new ToolDispatcher().run(runRequest) as Record<string, unknown>;
   return {
     ts: nowIso(),

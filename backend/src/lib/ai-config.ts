@@ -529,7 +529,7 @@ function aiToolNames() {
 }
 
 function runToolDescription() {
-  return "运行 Agent Hub 后端白名单中的本地 CTF 分析工具。文件类工具必须提供 artifact_path 或真实本地路径参数；网络类工具必须提供 target。";
+  return "运行 Agent Hub 后端白名单中的工具。web_search 用于搜索公网最新资料；文件类工具必须提供 artifact_path 或真实本地路径参数；网络类工具必须提供 target。";
 }
 
 function runToolParameters() {
@@ -538,6 +538,9 @@ function runToolParameters() {
     type: "object",
     properties: {
       tool: { type: "string", enum: tools, description: "要运行的白名单工具名" },
+      query: { type: "string", description: "web_search 查询词；也可用 args[0] 传递" },
+      allowed_domains: { type: "array", items: { type: "string" }, description: "web_search 可选：只包含这些域名" },
+      blocked_domains: { type: "array", items: { type: "string" }, description: "web_search 可选：排除这些域名" },
       target: { type: "string", description: "URL 或 Host，仅用于 whatweb/nmap/ffuf 等网络工具" },
       artifact_path: { type: "string", description: "上传目录中的附件文件名，或后端可访问的本地绝对路径；用于 file/strings/readelf/objdump/exiftool/binwalk/解压工具/tshark_summary，或交给 python 执行上传的 .py 脚本" },
       args: { type: "array", items: { type: "string" }, description: '额外参数；不要把 target 重复放进 args。python 可使用 ["-c", "短 Python 代码"]' }

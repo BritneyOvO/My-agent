@@ -1,4 +1,9 @@
 tools:
+  web_search:
+    command: ["__builtin_web_search"]
+    risk: low
+    requires_target: false
+    timeout: 45
   file:
     command: ["file"]
     risk: low

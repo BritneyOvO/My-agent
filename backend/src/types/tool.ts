@@ -4,6 +4,9 @@ export type ToolRunRequest = {
   target?: string;
   task_id?: string;
   artifact_path?: string;
+  query?: string;
+  allowed_domains?: string[];
+  blocked_domains?: string[];
   args: string[];
 };
 
@@ -15,6 +18,9 @@ export const toolRunRequestSchema = {
     const target = readOptionalString(body.target, "target", 1, 50000);
     const taskId = readOptionalString(body.task_id, "task_id", 1, 120);
     const artifactPath = readOptionalString(body.artifact_path, "artifact_path", 1, 50000);
+    const query = readOptionalString(body.query, "query", 1, 50000);
+    const allowedDomains = readOptionalStringArray(body.allowed_domains, "allowed_domains", 64, 300);
+    const blockedDomains = readOptionalStringArray(body.blocked_domains, "blocked_domains", 64, 300);
     const args = readStringArray(body.args ?? [], "args", 256, 200000);
     const result: ToolRunRequest = { tool, mode, args };
     if (target !== undefined) {
@@ -25,6 +31,15 @@ export const toolRunRequestSchema = {
     }
     if (artifactPath !== undefined) {
       result.artifact_path = artifactPath;
+    }
+    if (query !== undefined) {
+      result.query = query;
+    }
+    if (allowedDomains !== undefined) {
+      result.allowed_domains = allowedDomains;
+    }
+    if (blockedDomains !== undefined) {
+      result.blocked_domains = blockedDomains;
     }
     return result;
   }
@@ -62,4 +77,11 @@ function readStringArray(input: unknown, field: string, maxItems: number, maxLen
     throw new Error(`${field} cannot contain more than ${maxItems} items`);
   }
   return input.map((item) => readString(item, field, 0, maxLength));
+}
+
+function readOptionalStringArray(input: unknown, field: string, maxItems: number, maxLength: number) {
+  if (input === undefined || input === null) {
+    return undefined;
+  }
+  return readStringArray(input, field, maxItems, maxLength);
 }
