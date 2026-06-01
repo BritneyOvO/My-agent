@@ -494,6 +494,13 @@ function acceptedFromSubmitResponse(value: unknown, seen = new Set<unknown>()): 
       return record[key];
     }
   }
+  if (record.code === 200 && typeof record.data === "boolean") {
+    return record.data;
+  }
+  if (typeof record.code === "number") {
+    if (record.code === 200) return true;
+    if ([204, 301, 402, 403].includes(record.code)) return false;
+  }
   for (const key of ["status", "state", "result", "message", "msg"]) {
     const nested = record[key];
     if (typeof nested === "string") {
@@ -519,6 +526,66 @@ function acceptedFromSubmitResponse(value: unknown, seen = new Set<unknown>()): 
     }
   }
   return null;
+}
+
+function submitMessageFromResponse(value: unknown, seen = new Set<unknown>()): string | null {
+  if (!value || typeof value !== "object") {
+    return typeof value === "string" ? value : null;
+  }
+  if (seen.has(value)) {
+    return null;
+  }
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "msg", "error", "detail"]) {
+    if (typeof record[key] === "string" && record[key]) {
+      return record[key];
+    }
+  }
+  for (const key of ["data", "result", "submit_result", "raw", "response"]) {
+    const message = submitMessageFromResponse(record[key], seen);
+    if (message) {
+      return message;
+    }
+  }
+  return null;
+}
+
+function compactHistoryJson(value: unknown, maxChars = 1200) {
+  let text: string;
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
+}
+
+function autoSubmitHistoryComment(autoSubmit: NonNullable<Awaited<ReturnType<typeof maybeAutoSubmitFlag>>>) {
+  const record = autoSubmit as Record<string, unknown>;
+  const firstLine = [
+    `status=${String(record.status ?? "unknown")}`,
+    `attempted=${String(record.attempted ?? false)}`,
+    "accepted" in record ? `accepted=${String(record.accepted)}` : "",
+    "http_status" in record ? `http_status=${String(record.http_status)}` : "",
+    record.reason ? `reason=${String(record.reason)}` : "",
+  ].filter(Boolean).join(" ");
+  const lines = [firstLine];
+  const message = submitMessageFromResponse(record.response) ?? (typeof record.error === "string" ? record.error : null);
+  if (message) {
+    lines.push(`message=${message}`);
+  }
+  if ("response" in record) {
+    lines.push(`response=${compactHistoryJson(record.response)}`);
+  }
+  if (record.error && record.error !== message) {
+    lines.push(`error=${compactHistoryJson(record.error, 1000)}`);
+  }
+  return lines.join("\n");
 }
 
 async function postJsonWithTimeout(url: string, body: unknown) {
@@ -1185,7 +1252,10 @@ export async function executeTask(taskId: string, by = "agent-hub") {
         attempted: autoSubmit?.attempted ?? false,
         status: autoSubmit?.status ?? "disabled",
         accepted: autoSubmit && "accepted" in autoSubmit ? autoSubmit.accepted : null,
-        reason: autoSubmit?.reason ?? null
+        reason: autoSubmit?.reason ?? null,
+        http_status: autoSubmit && "http_status" in autoSubmit ? autoSubmit.http_status : null,
+        message: autoSubmit && "response" in autoSubmit ? submitMessageFromResponse(autoSubmit.response) : null,
+        response: autoSubmit && "response" in autoSubmit ? autoSubmit.response : null
       });
     }
 
@@ -1220,7 +1290,7 @@ export async function executeTask(taskId: string, by = "agent-hub") {
     latest.status = "completed";
     latest.updated_at = finishedAt;
     if (autoSubmit) {
-      latest.history.push({ ts: finishedAt, action: "flag_auto_submit", by, comment: `status=${autoSubmit.status} attempted=${String(autoSubmit.attempted)}` });
+      latest.history.push({ ts: finishedAt, action: "flag_auto_submit", by, comment: autoSubmitHistoryComment(autoSubmit) });
     }
     latest.history.push({ ts: finishedAt, action: "executed", by, comment: `provider=${provider} model=${model} steps=${steps.length}` });
     latest.history.push({ ts: finishedAt, action: "status_change", by, from: "running", to: "completed" });

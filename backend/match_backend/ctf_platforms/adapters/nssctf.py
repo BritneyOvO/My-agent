@@ -8,6 +8,7 @@ from ..normalize import annotate_contest_listing, merge_contest_listings
 from ..registry import register_platform
 
 DEFAULT_BASE_URL = "https://www.nssctf.cn"
+PROBLEM_BANK_CONTEST_ID = "__nss_problem_bank__"
 
 
 @register_platform("nss", "nssctf-problem", "nss-problem")
@@ -82,6 +83,28 @@ class NSSCTFPlatform(CTFPlatformClient):
     def current_user(self) -> dict[str, Any]:
         return to_plain(self.client.current_user())
 
+    def _problem_bank_contest(self) -> dict[str, Any]:
+        return {
+            "id": PROBLEM_BANK_CONTEST_ID,
+            "contest_id": PROBLEM_BANK_CONTEST_ID,
+            "name": "NSSCTF 题库",
+            "title": "NSSCTF 题库",
+            "summary": "题库题目 / 分页加载",
+            "category": "problem-bank",
+            "kind": "problem_bank",
+            "virtual": True,
+            "usage": {
+                "--contest-id": PROBLEM_BANK_CONTEST_ID,
+                "commands": {
+                    "challenges": f"python3 -m ctf_platforms -p {self.platform} challenges --contest-id {PROBLEM_BANK_CONTEST_ID}",
+                },
+            },
+        }
+
+    @staticmethod
+    def _is_problem_bank_contest(contest_id: str | int | None) -> bool:
+        return contest_id is None or str(contest_id) == PROBLEM_BANK_CONTEST_ID
+
     def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None, public: bool | None = None) -> Any:
         def contest_filters(contest_type: int) -> dict[str, Any]:
             # NSSCTF /api/contest/list/{page}/ requires this shape.
@@ -113,9 +136,24 @@ class NSSCTFPlatform(CTFPlatformClient):
                 data = {"contests": merged.get("items", []), "total": merged.get("total", 0)}
             else:
                 data = public_data or private_data
-        return to_plain(annotate_contest_listing(data, self.platform))
+        listing = annotate_contest_listing(data, self.platform)
+        if page == 1 and not search:
+            bank = self._problem_bank_contest()
+            if isinstance(listing, dict):
+                items = listing.get("contests") if isinstance(listing.get("contests"), list) else listing.get("items")
+                key = "contests" if isinstance(listing.get("contests"), list) else "items"
+                existing = items if isinstance(items, list) else []
+                listing = dict(listing)
+                listing[key] = [bank, *[item for item in existing if not (isinstance(item, dict) and str(item.get("contest_id") or item.get("id")) == PROBLEM_BANK_CONTEST_ID)]]
+                if isinstance(listing.get("total"), int):
+                    listing["total"] = int(listing["total"]) + 1
+            elif isinstance(listing, list):
+                listing = [bank, *[item for item in listing if not (isinstance(item, dict) and str(item.get("contest_id") or item.get("id")) == PROBLEM_BANK_CONTEST_ID)]]
+        return to_plain(listing)
 
     def get_contest(self, contest_id: str | int) -> Any:
+        if self._is_problem_bank_contest(contest_id):
+            return to_plain(self._problem_bank_contest())
         return to_plain(self.client.contest_info(int(contest_id)))
 
     def join_contest(self, contest_id: str | int, team_id: str | int | None = None, invite_code: str | None = None) -> Any:
@@ -130,7 +168,7 @@ class NSSCTFPlatform(CTFPlatformClient):
         # Internal namespace split:
         #   contest_id=None => problem bank
         #   contest_id set  => contest challenge list embedded in contest info
-        if contest_id is None:
+        if self._is_problem_bank_contest(contest_id):
             filters = {"search": search} if search else None
             data = self.client.problem_list(page=page, page_size=page_size, filters=filters)
             problems = data.get("problems") if isinstance(data, dict) else None
@@ -144,8 +182,19 @@ class NSSCTFPlatform(CTFPlatformClient):
         return to_plain(self.client.contest_problem_list(int(contest_id)))
 
     def get_challenge(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
-        if contest_id is None:
-            return to_plain(self.client.problem_detail(int(challenge_id)))
+        if self._is_problem_bank_contest(contest_id):
+            detail = self.client.problem_detail(int(challenge_id))
+            if detail.get("is_open"):
+                try:
+                    target_info = self.client.problem_target_info(int(challenge_id))
+                    detail = {
+                        **detail,
+                        "target_info": target_info,
+                        "addresses": self.client._collect_target_addresses(target_info),
+                    }
+                except Exception:
+                    pass
+            return to_plain(detail)
         detail = self.client.challenge_detail(int(contest_id), int(challenge_id))
         # Some public NSSCTF contests return an empty object from the detail
         # endpoint while the category list contains the visible challenge data.
@@ -158,22 +207,22 @@ class NSSCTFPlatform(CTFPlatformClient):
         return to_plain(detail)
 
     def download_attachment(self, challenge_id: str | int, outdir: str, contest_id: str | int | None = None) -> list[Any]:
-        if contest_id is None:
+        if self._is_problem_bank_contest(contest_id):
             return to_plain(self.client.download_problem_annex(int(challenge_id), outdir))
         return to_plain(self.client.download_annex(int(contest_id), int(challenge_id), outdir))
 
     def submit_flag(self, challenge_id: str | int, flag: str, contest_id: str | int | None = None) -> Any:
-        if contest_id is None:
+        if self._is_problem_bank_contest(contest_id):
             return to_plain(self.client.submit_problem_flag(int(challenge_id), flag))
         return to_plain(self.client.submit_flag(int(contest_id), int(challenge_id), flag))
 
     def start_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
-        if contest_id is None:
+        if self._is_problem_bank_contest(contest_id):
             return to_plain(self.client.open_problem_target(int(challenge_id)))
         return to_plain(self.client.open_contest_target(int(contest_id), int(challenge_id)))
 
     def close_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
-        if contest_id is None:
+        if self._is_problem_bank_contest(contest_id):
             return to_plain(self.client.close_problem_target(int(challenge_id)))
         return to_plain(self.client.close_contest_target(int(contest_id), int(challenge_id)))
 

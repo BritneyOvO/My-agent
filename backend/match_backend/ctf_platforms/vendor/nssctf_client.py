@@ -6,10 +6,11 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, unquote_to_bytes, urlparse
 
 import requests
 
@@ -29,6 +30,25 @@ NSS_TYPE_NAMES: Dict[str, str] = {
     "9": "AI",
     "10": "实战",
     "11": "靶场",
+}
+
+DEFAULT_PROBLEM_FILTERS: Dict[str, Any] = {
+    "category": 0,
+    "contest": "",
+    "year": "",
+    "source": 0,
+    "name": "",
+    "username": "",
+    "type": 0,
+    "docker": 0,
+    "tag": [],
+    "tagType": 0,
+    "point": [1, 1000],
+    "rate": [0, 5],
+    "date": "",
+    "state": "",
+    "order": "point",
+    "orderType": 0,
 }
 
 
@@ -61,6 +81,7 @@ class NSSCTFClient:
                 "Origin": self.base_url,
             }
         )
+        self._problem_detail_cache: Dict[int, Dict[str, Any]] = {}
 
     @staticmethod
     def default_session_file(base_url: str) -> Path:
@@ -103,15 +124,53 @@ class NSSCTFClient:
         raise NSSCTFError(f"API error code={code}: {data}")
 
     @staticmethod
-    def explain_code(code: Any) -> str:
+    def explain_code(code: Any, context: str | None = None) -> str:
+        if context == "problem_flag_submit":
+            return "Flag正确！" if code == 200 else "flag有误，请重新提交。"
+        if context == "contest_flag_submit":
+            return {
+                200: "Flag正确！",
+                203: "该题提交次数已达上限。",
+                204: "您已经解决本题了。",
+            }.get(code, "提交Flag失败。")
+        if context == "contest_detail":
+            return {
+                201: "比赛不存在！",
+                403: "您没有权限查看本场比赛！",
+            }.get(code, f"比赛详情获取失败，状态码 {code}")
         mapping = {
             200: "成功",
-            202: "比赛已结束，附件不可下载",
-            204: "提交未通过，通常表示 flag 错误、题目未开放，或当前状态不允许提交",
-            301: "需要进一步认证/权限不足",
-            402: "需要登录",
+            201: "未授权",
+            202: "资源不存在",
+            203: "参数校验失败",
+            204: "禁止操作",
+            205: "已达到限制",
+            301: "请先进行实名认证",
+            402: "请先登录",
+            403: "权限不足",
         }
         return mapping.get(code, f"未识别状态码 {code}")
+
+    def _result_from_response(self, resp: requests.Response, *, context: str | None = None) -> Dict[str, Any]:
+        data = self._json(resp)
+        if not isinstance(data, dict):
+            raise NSSCTFError(f"Unexpected response shape from {resp.url}: {data!r}")
+        code = data.get("code")
+        result_data = data.get("data") if "data" in data else {}
+        accepted = code == 200
+        message = self.explain_code(code, context=context)
+        if context == "contest_flag_submit":
+            accepted = code == 200 and bool(result_data)
+            if code == 200 and not accepted:
+                message = "Flag不正确。"
+        return {
+            "code": code,
+            "ok": accepted,
+            "accepted": accepted,
+            "message": message,
+            "data": result_data,
+            "raw": data,
+        }
 
     def save_session(self, path: str) -> Dict[str, Any]:
         target = Path(path)
@@ -185,7 +244,18 @@ class NSSCTFClient:
     def contest_info(self, contest_id: int) -> Dict[str, Any]:
         resp = self._request("GET", f"/api/contest/{contest_id}/info/")
         resp.raise_for_status()
-        return self._unwrap(resp).get("data") or {}
+        data = self._json(resp)
+        if not isinstance(data, dict):
+            raise NSSCTFError(f"Unexpected response shape from {resp.url}: {data!r}")
+        if data.get("code") == 200:
+            return data.get("data") or {}
+        return {
+            "code": data.get("code"),
+            "ok": False,
+            "message": self.explain_code(data.get("code"), context="contest_detail"),
+            "data": data.get("data") or {},
+            "raw": data,
+        }
 
     def contest_accessible(self, contest_id: int) -> Dict[str, Any]:
         resp = self._request("GET", f"/api/contest/{contest_id}/accessible/")
@@ -210,18 +280,71 @@ class NSSCTFClient:
     def problem_recent(self) -> List[Dict[str, Any]]:
         resp = self._request("GET", "/api/problem/index/recent/")
         resp.raise_for_status()
-        return self._unwrap(resp).get("data") or []
+        data = self._unwrap(resp).get("data") or []
+        return self.enrich_problem_summaries(data) if isinstance(data, list) else []
 
     def problem_list(self, page: int = 1, page_size: int = 20, filters: Optional[Dict[str, Any]] = None, team_mode: bool = False) -> Dict[str, Any]:
         path = f"/api/problem/team/list/{page}/{page_size}/" if team_mode else f"/api/problem/v3/list/{page}/{page_size}/"
-        resp = self._request("POST", path, json=filters or {})
+        request_filters = {**DEFAULT_PROBLEM_FILTERS, **(filters or {})}
+        if "search" in request_filters:
+            request_filters["name"] = request_filters.pop("search")
+        resp = self._request("POST", path, json=request_filters)
         resp.raise_for_status()
-        return self._unwrap(resp).get("data") or {}
+        data = self._unwrap(resp).get("data") or {}
+        if isinstance(data, dict) and isinstance(data.get("problems"), list):
+            data = {**data, "problems": self.enrich_problem_summaries(data["problems"])}
+        return data
 
     def problem_detail(self, problem_id: int) -> Dict[str, Any]:
         resp = self._request("GET", f"/api/problem/v2/{problem_id}/")
         resp.raise_for_status()
-        return self._unwrap(resp).get("data") or {}
+        detail = self._normalize_problem(self._unwrap(resp).get("data") or {})
+        self._problem_detail_cache[problem_id] = detail
+        return detail
+
+    @staticmethod
+    def _normalize_problem(problem: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(problem)
+        type_id = normalized.get("type")
+        type_name = NSS_TYPE_NAMES.get(str(type_id)) if type_id is not None else None
+        if type_id is not None:
+            normalized.setdefault("type_id", type_id)
+        if normalized.get("category") is not None:
+            normalized.setdefault("category_id", normalized.get("category"))
+        if type_name:
+            normalized["category"] = type_name
+            normalized.setdefault("direction", type_name)
+            normalized.setdefault("type_name", type_name)
+        if "docker" in normalized:
+            normalized.setdefault("has_target", bool(normalized["docker"]))
+        if "annex" in normalized:
+            normalized.setdefault("has_attachment", bool(normalized["annex"]))
+        return normalized
+
+    def enrich_problem_summaries(self, problems: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add type and capability fields omitted by NSSCTF's paged list API."""
+        rows = [dict(problem) for problem in problems if isinstance(problem, dict)]
+        missing_ids = []
+        for row in rows:
+            problem_id = row.get("id") or row.get("pid")
+            if isinstance(problem_id, int) and problem_id not in self._problem_detail_cache:
+                missing_ids.append(problem_id)
+
+        if missing_ids:
+            with ThreadPoolExecutor(max_workers=min(8, len(missing_ids))) as executor:
+                futures = {executor.submit(self.problem_detail, problem_id): problem_id for problem_id in missing_ids}
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        self.log("problem detail enrichment failed", futures[future], exc)
+
+        enriched = []
+        for row in rows:
+            problem_id = row.get("id") or row.get("pid")
+            detail = self._problem_detail_cache.get(problem_id, {}) if isinstance(problem_id, int) else {}
+            enriched.append(self._normalize_problem({**detail, **row}))
+        return enriched
 
     def problem_annex(self, problem_id: int) -> requests.Response:
         resp = self._request("GET", f"/api/problem/{problem_id}/annex/download/", stream=True)
@@ -245,7 +368,75 @@ class NSSCTFClient:
 
     def open_problem_target(self, problem_id: int, type_id: int = 0) -> Dict[str, Any]:
         """Open a problem-bank dynamic target/container."""
-        return self.open_problem_attachment(problem_id, type_id=type_id)
+        open_result = self.open_problem_attachment(problem_id, type_id=type_id)
+        if open_result.get("code") not in {200, 203}:
+            return {
+                "problem_id": problem_id,
+                "opened": False,
+                "pending": False,
+                "open_result": open_result,
+                "addresses": [],
+            }
+
+        target_info: Dict[str, Any] = {}
+        for attempt in range(16):
+            target_info = self.problem_target_info(problem_id)
+            if self._target_info_ready(target_info):
+                break
+            if attempt < 15:
+                time.sleep(1)
+        addresses = self._collect_target_addresses(target_info)
+        opened = bool(addresses) or open_result.get("code") == 200 or target_info.get("code") == 200
+        return {
+            "problem_id": problem_id,
+            "opened": opened,
+            "pending": opened and not bool(addresses),
+            "open_result": open_result,
+            "target_info": target_info,
+            "addresses": addresses,
+        }
+
+    def problem_target_info(self, problem_id: int) -> Dict[str, Any]:
+        """Return NSSCTF problem-bank docker provisioning state and URL."""
+        resp = self._request("GET", f"/api/problem/docker/{problem_id}/")
+        resp.raise_for_status()
+        data = self._json(resp)
+        if not isinstance(data, dict):
+            raise NSSCTFError(f"Unexpected target info response from {resp.url}: {data!r}")
+        return data
+
+    @staticmethod
+    def _target_info_ready(target_info: Dict[str, Any]) -> bool:
+        if target_info.get("code") != 200:
+            return False
+        data = target_info.get("data")
+        if not isinstance(data, dict):
+            return False
+        state = data.get("state")
+        return isinstance(data.get("url"), str) and bool(data["url"].strip()) and (not isinstance(state, (int, float)) or state >= 4)
+
+    @staticmethod
+    def _collect_target_addresses(*payloads: Any) -> List[str]:
+        addresses: List[str] = []
+
+        def add(value: Any) -> None:
+            if isinstance(value, str) and value.strip() and value.strip() not in addresses:
+                addresses.append(value.strip())
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                for key in ("url", "entry", "address", "target", "endpoint"):
+                    add(value.get(key))
+                for child in value.values():
+                    if isinstance(child, (dict, list)):
+                        walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+
+        for payload in payloads:
+            walk(payload)
+        return addresses
 
     def open_contest_target(self, contest_id: int, problem_id: int, type_id: int = 0) -> Dict[str, Any]:
         """Open a contest dynamic target/container.
@@ -281,7 +472,7 @@ class NSSCTFClient:
     def close_problem_target(self, problem_id: int, type_id: int = 0) -> Dict[str, Any]:
         """Close a problem-bank dynamic target/container."""
         paths = [
-            ("POST", f"/api/problem/docker/{problem_id}/close/", {"json": {"type": type_id}}),
+            ("POST", f"/api/problem/docker/{problem_id}/close/", {}),
             ("DELETE", f"/api/problem/docker/{problem_id}/close/", {"json": {"type": type_id}}),
             ("POST", f"/api/problem/docker/{problem_id}/destroy/", {"json": {"type": type_id}}),
             ("DELETE", f"/api/problem/docker/{problem_id}/", {"json": {"type": type_id}}),
@@ -296,7 +487,7 @@ class NSSCTFClient:
                 data = self._json(resp)
                 if not isinstance(data, dict):
                     raise NSSCTFError(f"Unexpected close response from {resp.url}: {data!r}")
-                return data
+                return {"problem_id": problem_id, "closed": data.get("code") == 200, "close_result": data, "addresses": []}
             except Exception as exc:
                 last_error = exc
                 self.log("problem target close failed", method, path, exc)
@@ -333,14 +524,61 @@ class NSSCTFClient:
         raise NSSCTFError(f"Contest target close failed: {last_error}")
 
     @staticmethod
-    def _filename_from_url(url: str) -> Optional[str]:
+    def _decode_filename_value(value: str) -> str:
+        text = value.strip().strip('"').strip("'")
+        if not text:
+            return ""
+        if "''" in text:
+            charset, encoded = text.split("''", 1)
+            try:
+                return unquote_to_bytes(encoded).decode(charset or "utf-8").strip()
+            except Exception:
+                text = encoded
+        text = unquote(text).strip()
+        try:
+            # requests follows RFC 7230 and decodes headers as latin1.  NSSCTF
+            # file services may put raw UTF-8 bytes in filename=, which appears
+            # as mojibake such as "éä»¶.py" unless repaired here.
+            repaired = text.encode("latin1").decode("utf-8").strip()
+            if repaired:
+                return repaired
+        except UnicodeError:
+            pass
+        return text
+
+    @classmethod
+    def _filename_from_content_disposition(cls, value: str) -> Optional[str]:
+        if not value:
+            return None
+        parts = [part.strip() for part in value.split(";")]
+        params: Dict[str, str] = {}
+        for part in parts[1:]:
+            if "=" not in part:
+                continue
+            key, raw = part.split("=", 1)
+            params[key.strip().lower()] = raw.strip()
+        for key in ("filename*", "filename"):
+            if key in params:
+                name = cls._decode_filename_value(params[key])
+                if name:
+                    return Path(name).name
+        return None
+
+    @classmethod
+    def _filename_from_url(cls, url: str) -> Optional[str]:
         parsed = urlparse(url)
         query = parse_qs(parsed.query)
         for key in ("response-content-disposition", "content-disposition"):
             for value in query.get(key, []):
-                if "filename=" in value:
-                    return unquote(value.split("filename=", 1)[1].strip().strip('"'))
-        return None
+                name = cls._filename_from_content_disposition(value)
+                if name:
+                    return name
+        path_name = cls._decode_filename_value(Path(parsed.path).name)
+        return path_name or None
+
+    @classmethod
+    def _filename_from_response(cls, resp: requests.Response) -> Optional[str]:
+        return cls._filename_from_content_disposition(resp.headers.get("content-disposition", "")) or cls._filename_from_url(resp.url)
 
     def _download_external_url(self, external_url: str) -> requests.Response:
         real = self._request("GET", external_url, stream=True)
@@ -416,14 +654,10 @@ class NSSCTFClient:
         out.mkdir(parents=True, exist_ok=True)
         ctype = resp.headers.get("content-type", "")
         if not filename:
-            cd = resp.headers.get("content-disposition", "")
-            if "filename=" in cd:
-                filename = cd.split("filename=", 1)[1].strip().strip('"')
-            elif resp.url:
-                filename = self._filename_from_url(resp.url)
-            elif "json" in ctype:
+            filename = self._filename_from_response(resp)
+            if not filename and "json" in ctype:
                 filename = f"problem_{problem_id}_annex.json"
-            else:
+            elif not filename:
                 filename = f"problem_{problem_id}.bin"
         path = out / filename
         size = 0
@@ -438,16 +672,7 @@ class NSSCTFClient:
     def submit_problem_flag(self, problem_id: int, flag: str) -> Dict[str, Any]:
         resp = self._request("POST", f"/api/problem/submit/{problem_id}/", json={"flag": flag})
         resp.raise_for_status()
-        data = self._json(resp)
-        if not isinstance(data, dict):
-            raise NSSCTFError(f"Unexpected response shape from {resp.url}: {data!r}")
-        code = data.get("code")
-        return {
-            "code": code,
-            "ok": code == 200,
-            "message": self.explain_code(code),
-            "data": data.get("data") or {},
-        }
+        return self._result_from_response(resp, context="problem_flag_submit")
 
     def contest_problem_categories(self, contest_id: int) -> Dict[str, Any]:
         resp = self._request("GET", f"/api/contest/{contest_id}/problem/category/")
@@ -567,12 +792,10 @@ class NSSCTFClient:
         out.mkdir(parents=True, exist_ok=True)
         ctype = resp.headers.get("content-type", "")
         if not filename:
-            cd = resp.headers.get("content-disposition", "")
-            if "filename=" in cd:
-                filename = cd.split("filename=", 1)[1].strip().strip('"')
-            elif "json" in ctype:
+            filename = self._filename_from_response(resp)
+            if not filename and "json" in ctype:
                 filename = f"contest_{contest_id}_problem_{problem_id}_annex.json"
-            else:
+            elif not filename:
                 filename = f"contest_{contest_id}_problem_{problem_id}.bin"
         path = out / filename
         size = 0
@@ -588,16 +811,7 @@ class NSSCTFClient:
         path = f"/api/contest/team/{contest_id}/problem/{problem_id}/submit/" if team_mode else f"/api/contest/{contest_id}/problem/{problem_id}/submit/"
         resp = self._request("POST", path, json={"flag": flag})
         resp.raise_for_status()
-        data = self._json(resp)
-        if not isinstance(data, dict):
-            raise NSSCTFError(f"Unexpected response shape from {resp.url}: {data!r}")
-        code = data.get("code")
-        return {
-            "code": code,
-            "ok": code == 200,
-            "message": self.explain_code(code),
-            "data": data.get("data") or {},
-        }
+        return self._result_from_response(resp, context="contest_flag_submit")
 
 
 def emit(data: Any, as_json: bool) -> None:

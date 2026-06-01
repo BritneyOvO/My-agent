@@ -392,10 +392,11 @@ export function targetLooksOpened(value: unknown): boolean {
     seen.add(item);
     const record = item as Record<string, unknown>;
     if (record.closed === true) return false;
+    if (record.opened === true || record.pending === true || record.is_open === true || record.isOpen === true) return true;
     if (successLike(record.start_result) || successLike(record.open_result)) return true;
     if (record.kind && (meaningful(record.scene_data) || meaningful(record.addresses)) && record.closed !== true) return true;
     for (const [key, child] of Object.entries(record)) {
-      if (/^(already_?running|closed|is_?scene_?inst_?running|with_?scene_?inst)$/i.test(key)) {
+      if (/^(already_?running|closed|is_?open|isOpen|is_?scene_?inst_?running|with_?scene_?inst)$/i.test(key)) {
         if (key.toLowerCase() === "closed") return child === false;
         if (child === true || (typeof child === "number" && child > 0) || (typeof child === "string" && /^(true|1|running|opened|open)$/i.test(child.trim()))) return true;
       }

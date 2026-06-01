@@ -220,6 +220,12 @@ class FakeNSSCTFClient:
     def submit_flag(self, contest_id, problem_id, flag):
         return {"code": 200, "contest_id": contest_id, "problem_id": problem_id, "flag": flag}
 
+    def open_problem_target(self, problem_id):
+        return {"problem_id": problem_id, "opened": True, "pending": False, "addresses": ["http://nss-target.local:8080"]}
+
+    def close_problem_target(self, problem_id):
+        return {"problem_id": problem_id, "closed": True, "addresses": []}
+
 
 class FakeAdWorldClient:
     def __init__(self, base_url, timeout=20, verify=True, debug=False):
@@ -415,16 +421,24 @@ class UnifiedOperationTests(unittest.TestCase):
             client = NSSCTFPlatform(PlatformConfig(session_file=session))
             self.assertTrue(client.login(Credentials(username="u", password="p"))["login"]["success"])
             self.assertEqual(client.current_user()["name"], "nss-user")
-            self.assertEqual(client.list_contests()["contests"][0]["id"], 815)
+            contests = client.list_contests()["contests"]
+            self.assertEqual(contests[0]["id"], "__nss_problem_bank__")
+            self.assertEqual(contests[1]["id"], 815)
+            self.assertTrue(client.get_contest("__nss_problem_bank__")["virtual"])
             self.assertTrue(client.join_contest(815)["registered"])
             self.assertEqual(client.list_challenges()["problems"][0]["id"], 6434)
+            self.assertEqual(client.list_challenges(contest_id="__nss_problem_bank__")["problems"][0]["id"], 6434)
             self.assertEqual(client.list_challenges(contest_id=815)["problems"][0]["id"], 1001)
             self.assertEqual(client.get_challenge(6434)["id"], 6434)
+            self.assertEqual(client.get_challenge(6434, contest_id="__nss_problem_bank__")["id"], 6434)
             self.assertEqual(client.get_challenge(1001, contest_id=815)["contest_id"], 815)
             self.assertTrue(Path(client.download_attachment(6434, str(Path(td) / "dl1"))[0]["path"]).exists())
             self.assertTrue(Path(client.download_attachment(1001, str(Path(td) / "dl2"), contest_id=815)[0]["path"]).exists())
             self.assertEqual(client.submit_flag(6434, "NSSCTF{x}")["code"], 200)
+            self.assertEqual(client.submit_flag(6434, "NSSCTF{x}", contest_id="__nss_problem_bank__")["code"], 200)
             self.assertEqual(client.submit_flag(1001, "NSSCTF{x}", contest_id=815)["code"], 200)
+            self.assertEqual(client.start_target(6434, contest_id="__nss_problem_bank__")["addresses"][0], "http://nss-target.local:8080")
+            self.assertTrue(client.close_target(6434, contest_id="__nss_problem_bank__")["closed"])
             self.assertEqual(client.scoreboard(815)["rank"][0]["score"], 1)
 
             token_client = NSSCTFPlatform(PlatformConfig(session_file=session))
