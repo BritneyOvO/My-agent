@@ -64,7 +64,16 @@ export function parseScopeYaml(text: string) {
 
 export function parseToolRegistryYaml(text: string) {
   const result: {
-    tools: Record<string, { command: string[]; risk?: string; requires_target?: boolean; timeout?: number }>;
+    tools: Record<string, {
+      command: string[];
+      risk?: string;
+      requires_target?: boolean;
+      timeout?: number;
+      kind?: string;
+      max_output_chars?: number;
+      description?: string;
+      prompt?: string;
+    }>;
   } = { tools: {} };
   let inTools = false;
   let currentTool: string | null = null;
@@ -104,6 +113,14 @@ export function parseToolRegistryYaml(text: string) {
         tool.timeout = Number(value);
       } else if (key === "risk") {
         tool.risk = String(value);
+      } else if (key === "kind") {
+        tool.kind = String(value);
+      } else if (key === "max_output_chars") {
+        tool.max_output_chars = Number(value);
+      } else if (key === "description") {
+        tool.description = String(value);
+      } else if (key === "prompt") {
+        tool.prompt = String(value);
       }
     }
   }

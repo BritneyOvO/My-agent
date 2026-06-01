@@ -453,8 +453,9 @@ export default function App() {
       password: account.password,
       token: account.token
     });
-    if (sessionId() && selectedAccountId() === account.id) return;
-    const sid = await createSessionFromDraft(account, { navigateToContests: false, accountId: account.id });
+    const sid = sessionId() && selectedAccountId() === account.id
+      ? sessionId()
+      : await createSessionFromDraft(account, { navigateToContests: false, accountId: account.id });
     if (!sid) return;
     if (route.contestId) {
       setSelectedContestId(route.contestId);
@@ -1548,10 +1549,11 @@ export default function App() {
 	                const agentSteps = () => Array.isArray(result().agent_steps) ? result().agent_steps as Record<string, unknown>[] : [];
 	                const compactionEvents = () => Array.isArray(result().context_compaction_events) ? result().context_compaction_events as Record<string, unknown>[] : [];
 	                const history = () => Array.isArray(task().history) ? task().history as Record<string, unknown>[] : [];
+	                const visibleHistory = () => history().filter((item) => String(item.action ?? "") !== "agent_step");
 	                const timeline = () => {
 	                  const items: Record<string, unknown>[] = [
 	                    ...agentSteps().map((step, index) => ({ type: "step", ts: String(step.ts ?? ""), order: index, payload: step })),
-	                    ...history().map((item, index) => ({ type: "history", ts: String(item.ts ?? ""), order: agentSteps().length + index, payload: item }))
+	                    ...visibleHistory().map((item, index) => ({ type: "history", ts: String(item.ts ?? ""), order: agentSteps().length + index, payload: item }))
 	                  ];
 	                  return items.sort((a, b) => {
 	                    const left = timestampMs(a.ts) ?? 0;
@@ -1666,7 +1668,7 @@ export default function App() {
                         <section class="task-detail-section">
                           <div class="section-head">
                             <h3>Agent 解题步骤</h3>
-                            <span>{agentSteps().length} steps / {history().length} history</span>
+                            <span>{agentSteps().length} steps / {visibleHistory().length} history</span>
                           </div>
                           <div class="tool-call-list">
                             <For each={timeline()}>{(entry) => {

@@ -1,126 +1,200 @@
 tools:
+  Read:
+    command: ["__builtin_file_read"]
+    kind: filesystem
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 120000
+  Write:
+    command: ["__builtin_file_write"]
+    kind: filesystem
+    risk: high
+    requires_target: false
+    timeout: 30
+    max_output_chars: 20000
+  Edit:
+    command: ["__builtin_file_edit"]
+    kind: filesystem
+    risk: high
+    requires_target: false
+    timeout: 30
+    max_output_chars: 20000
+  Glob:
+    command: ["__builtin_glob"]
+    kind: filesystem
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 100000
+  Grep:
+    command: ["__builtin_grep"]
+    kind: filesystem
+    risk: low
+    requires_target: false
+    timeout: 60
+    max_output_chars: 100000
+  LS:
+    command: ["__builtin_ls"]
+    kind: filesystem
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 100000
   web_search:
     command: ["__builtin_web_search"]
+    kind: search
     risk: low
     requires_target: false
     timeout: 45
+    max_output_chars: 50000
   file:
     command: ["file"]
+    kind: forensic
     risk: low
     requires_target: false
     timeout: 20
   strings:
     command: ["strings"]
+    kind: forensic
     risk: low
     requires_target: false
     timeout: 20
+    max_output_chars: 80000
   readelf:
     command: ["readelf", "-a"]
+    kind: binary
     risk: low
     requires_target: false
     timeout: 20
+    max_output_chars: 120000
   objdump:
     command: ["objdump", "-d"]
+    kind: binary
     risk: low
     requires_target: false
     timeout: 30
+    max_output_chars: 120000
   exiftool:
     command: ["exiftool"]
+    kind: forensic
     risk: low
     requires_target: false
     timeout: 20
   binwalk:
     command: ["binwalk"]
+    kind: forensic
     risk: low
     requires_target: false
     timeout: 60
   unzip_list:
     command: ["unzip", "-l"]
+    kind: archive
     risk: low
     requires_target: false
     timeout: 30
   unzip:
     command: ["unzip", "-o"]
+    kind: archive
     risk: medium
     requires_target: false
     timeout: 120
   7z_list:
     command: ["7z", "l"]
+    kind: archive
     risk: low
     requires_target: false
     timeout: 60
   7z_extract:
     command: ["7z", "x", "-y"]
+    kind: archive
     risk: medium
     requires_target: false
     timeout: 180
   rar_list:
     command: ["unrar", "l"]
+    kind: archive
     risk: low
     requires_target: false
     timeout: 60
   rar_extract:
     command: ["unrar", "x", "-o+"]
+    kind: archive
     risk: medium
     requires_target: false
     timeout: 180
   tar_list:
     command: ["tar", "-tf"]
+    kind: archive
     risk: low
     requires_target: false
     timeout: 30
   tar_extract:
     command: ["tar", "-xf"]
+    kind: archive
     risk: medium
     requires_target: false
     timeout: 120
   gzip_decompress:
     command: ["gzip", "-dkf"]
+    kind: archive
     risk: medium
     requires_target: false
     timeout: 60
   bzip2_decompress:
     command: ["bzip2", "-dkf"]
+    kind: archive
     risk: medium
     requires_target: false
     timeout: 60
   xz_decompress:
     command: ["xz", "-dkf"]
+    kind: archive
     risk: medium
     requires_target: false
     timeout: 60
   r2:
-    command: ["bash", "/home/ctf/My-agent/backend/scripts/r2_tool.sh"]
+    command: ["/usr/local/bin/r2", "-q", "-e", "scr.color=false", "-e", "scr.utf8=false"]
+    kind: binary
     risk: medium
     requires_target: false
     timeout: 120
+    max_output_chars: 120000
   tshark_summary:
     command: ["tshark", "-r"]
+    kind: forensic
     risk: low
     requires_target: false
     timeout: 60
+    max_output_chars: 120000
   python:
     command: ["python3"]
+    kind: code
     risk: medium
     requires_target: false
     timeout: 60
   curl:
     command: ["curl", "-i", "-L", "-sS", "--max-time", "30", "--connect-timeout", "8"]
+    kind: network
     risk: medium
     requires_target: true
     timeout: 40
+    max_output_chars: 80000
   whatweb:
     command: ["whatweb", "--no-errors"]
+    kind: network
     risk: medium
     requires_target: true
     timeout: 60
   nmap:
     command: ["nmap", "-sV", "--top-ports", "100"]
+    kind: network
     risk: medium
     requires_target: true
     timeout: 120
   ffuf:
-    command: ["ffuf"]
+    command: ["ffuf", "-u"]
+    kind: network
     risk: medium
     requires_target: true
     timeout: 120

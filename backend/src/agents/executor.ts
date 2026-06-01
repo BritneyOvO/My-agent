@@ -46,6 +46,7 @@ type ToolCallRecord = {
   call_id?: string;
   source?: string;
   args: string[];
+  input?: Record<string, unknown>;
   result: Record<string, unknown>;
 };
 
@@ -56,6 +57,7 @@ type ToolRequest = {
   query?: string;
   allowed_domains?: string[];
   blocked_domains?: string[];
+  input?: Record<string, unknown>;
   args: string[];
   call_id?: string;
   source?: string;
@@ -110,6 +112,7 @@ export async function appendTaskToolCall(taskId: string, input: {
   tool: string;
   target?: string | null;
   args: string[];
+  tool_input?: Record<string, unknown>;
   result: Record<string, unknown>;
 }) {
   const task = await loadTask(taskId);
@@ -122,6 +125,7 @@ export async function appendTaskToolCall(taskId: string, input: {
     tool: input.tool,
     target: input.target ?? null,
     args: input.args,
+    ...(input.tool_input ? { input: input.tool_input } : {}),
     result: input.result
   });
   result.tool_calls = calls;
@@ -135,8 +139,17 @@ export async function appendTaskToolCall(taskId: string, input: {
 
 function availableToolText() {
   return new ToolRegistry().list().filter((tool) => tool.available).map((tool) => (
-    `- ${tool.name}: risk=${tool.risk ?? "low"}, requires_target=${String(tool.requires_target)}, timeout=${tool.timeout}s`
+    [
+      `- ${tool.name}: kind=${tool.kind ?? "generic"}, risk=${tool.risk ?? "low"}, requires_target=${String(tool.requires_target)}, timeout=${tool.timeout}s`,
+      indentToolPrompt(String(tool.prompt ?? tool.description ?? ""))
+    ].filter(Boolean).join("\n")
   )).join("\n");
+}
+
+function indentToolPrompt(prompt: string) {
+  const trimmed = prompt.trim();
+  if (!trimmed) return "";
+  return trimmed.split(/\r?\n/).map((line) => `  ${line}`).join("\n");
 }
 
 function artifactText(task: StoredTask) {
@@ -183,14 +196,10 @@ function systemPrompt() {
     "2. 如果当前模型不支持函数调用，才在回复最后输出 XML 或 JSON 工具计划。",
     "3. JSON 格式：{\"tool_calls\":[{\"tool\":\"工具名\",\"target\":\"可选URL或Host\",\"artifact_path\":\"可选上传文件名或本地绝对路径\",\"args\":[\"可选参数\"]}],\"reason\":\"原因\"}",
     "4. XML 格式：<tool_calls><tool_call name=\"工具名\"><arg key=\"target\">...</arg></tool_call></tool_calls>",
-    "5. file/readelf/objdump/exiftool/binwalk/tshark_summary/r2 是附件/文件工具：必须提供 artifact_path（上传文件名或后端可访问的本地绝对路径），或 args 中是真实本地文件路径；绝不能把 URL/IP/Host 当文件名。",
-    "6. unzip_list/unzip/7z_list/7z_extract/rar_list/rar_extract/tar_list/tar_extract/gzip_decompress/bzip2_decompress/xz_decompress 是压缩包工具；优先先 list 再 extract，必要时用 args 指定真实本地文件路径或解压参数。rar_list/rar_extract 使用 unrar 专用工具。",
-    "7. r2 是 radare2 包装工具：artifact_path 指向二进制；args 是 r2 命令列表，例如 [\"aaa\",\"iI\",\"afl\",\"pdf @ main\",\"izz\"]；不传 args 时默认输出 iI/afl/izz。",
-    "8. python 用于执行短 Python 代码或上传的 .py 脚本：短代码使用 args=[\"-c\", \"代码\"]；上传脚本使用 artifact_path。优先编写可复现的小脚本处理编码、解密、数据转换和附件分析。",
-    "9. curl/whatweb/nmap/ffuf 是网络工具：必须提供 target，且不要把 target 重复放进 args。curl 用于 HTTP 探测、带 Header/API 请求和查看响应头体。",
-    "10. web_search 用于搜索公网最新资料：优先传 query 字段，例如 {\"tool\":\"web_search\",\"query\":\"OpenAI Responses web search docs 2026\"}；需要限制域名时可传 allowed_domains 或 blocked_domains。",
-    "11. 如果工具失败，基于错误反思并换路径；不要重复同样失败调用。",
-    "12. 一次最多规划少量有依赖关系的工具调用。",
+    "5. 每个工具的详细用法已列在可用工具说明里；优先按说明中的 input/target/artifact_path/args 传参。",
+    "6. Read/Write/Edit/Glob/Grep/LS 是内建文件系统工具，可访问后端可访问的任意路径，不做工作区沙盒限制。结构化参数放入 input。",
+    "7. 如果工具失败，基于错误反思并换路径；不要重复同样失败调用。",
+    "8. 一次最多规划少量有依赖关系的工具调用。",
   ].join("\n");
 }
 
@@ -213,11 +222,6 @@ function parseStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function isNetworkTarget(value: string | undefined) {
-  if (!value) return false;
-  return /^https?:\/\//i.test(value) || /^(?:localhost|127\.0\.0\.1|\[[^\]]+\]|[\w.-]+)(?::\d+)?(?:\/.*)?$/i.test(value);
-}
-
 function toolMeta(toolName: string) {
   return new ToolRegistry().get(toolName);
 }
@@ -236,13 +240,19 @@ function normalizeToolRequest(value: unknown, source = "json"): ToolRequest | nu
     if (typeof argsRecord.query === "string") record.query = argsRecord.query;
     if (Array.isArray(argsRecord.allowed_domains)) record.allowed_domains = argsRecord.allowed_domains;
     if (Array.isArray(argsRecord.blocked_domains)) record.blocked_domains = argsRecord.blocked_domains;
-    if (typeof argsRecord.content === "string") request.args.push(argsRecord.content);
+    request.input = { ...argsRecord };
   }
   if (typeof record.target === "string" && record.target.trim()) request.target = record.target.trim();
   if (typeof record.artifact_path === "string" && record.artifact_path.trim()) request.artifact_path = record.artifact_path.trim();
   if (typeof record.query === "string" && record.query.trim()) request.query = record.query.trim();
   if (Array.isArray(record.allowed_domains)) request.allowed_domains = parseStringArray(record.allowed_domains);
   if (Array.isArray(record.blocked_domains)) request.blocked_domains = parseStringArray(record.blocked_domains);
+  if (record.input && typeof record.input === "object" && !Array.isArray(record.input)) request.input = { ...(record.input as Record<string, unknown>) };
+  const structuredInput = Object.fromEntries(Object.entries(record).filter(([key]) => [
+    "file_path", "content", "old_string", "new_string", "replace_all", "pattern", "path", "glob", "output_mode",
+    "head_limit", "offset", "limit", "multiline", "type", "context", "-A", "-B", "-C", "-i", "-n"
+  ].includes(key)));
+  if (Object.keys(structuredInput).length) request.input = { ...(request.input ?? {}), ...structuredInput };
   if (typeof record.call_id === "string" && record.call_id.trim()) request.call_id = record.call_id.trim();
   return sanitizeToolRequest(request);
 }
@@ -257,6 +267,7 @@ function sanitizeToolRequest(request: ToolRequest): ToolRequest | null {
       ...(request.query ? { query: request.query } : {}),
       ...(request.allowed_domains?.length ? { allowed_domains: request.allowed_domains } : {}),
       ...(request.blocked_domains?.length ? { blocked_domains: request.blocked_domains } : {}),
+      ...(request.input ? { input: request.input } : {}),
       ...(request.source ? { source: request.source } : {}),
       ...(request.call_id ? { call_id: request.call_id } : {}),
       ...(request.artifact_path ? { artifact_path: request.artifact_path } : {})
@@ -265,17 +276,6 @@ function sanitizeToolRequest(request: ToolRequest): ToolRequest | null {
   const cleaned: ToolRequest = { ...request, args: [...request.args] };
   if (meta.requires_target && cleaned.target) {
     cleaned.args = cleaned.args.filter((arg) => arg !== cleaned.target);
-  }
-  if (request.tool !== "web_search" && !meta.requires_target && cleaned.target && isNetworkTarget(cleaned.target) && !cleaned.artifact_path) {
-    return {
-      tool: "__invalid_tool_request__",
-      args: [],
-      target: cleaned.target,
-      ...(cleaned.query ? { query: cleaned.query } : {}),
-      ...(cleaned.source ? { source: cleaned.source } : {}),
-      ...(cleaned.call_id ? { call_id: cleaned.call_id } : {}),
-      ...(cleaned.artifact_path ? { artifact_path: cleaned.artifact_path } : {})
-    };
   }
   return cleaned;
 }
@@ -398,7 +398,7 @@ function splitAdjacentJsonObjects(text: string) {
 function dedupeToolRequests(requests: ToolRequest[]) {
   const seen = new Set<string>();
   return requests.filter((request) => {
-    const key = JSON.stringify({ tool: request.tool, target: request.target ?? null, artifact_path: request.artifact_path ?? null, args: request.args });
+    const key = JSON.stringify({ tool: request.tool, target: request.target ?? null, artifact_path: request.artifact_path ?? null, input: request.input ?? null, args: request.args });
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -442,6 +442,7 @@ async function runRequestedTool(task: StoredTask, request: ToolRequest): Promise
   if (request.query) runRequest.query = request.query;
   if (request.allowed_domains) runRequest.allowed_domains = request.allowed_domains;
   if (request.blocked_domains) runRequest.blocked_domains = request.blocked_domains;
+  if (request.input) runRequest.input = request.input;
   const result = await new ToolDispatcher().run(runRequest) as Record<string, unknown>;
   return {
     ts: nowIso(),
@@ -449,6 +450,7 @@ async function runRequestedTool(task: StoredTask, request: ToolRequest): Promise
     tool: request.tool,
     target: request.target ?? null,
     args: request.args,
+    ...(request.input ? { input: request.input } : {}),
     ...(request.source ? { source: request.source } : {}),
     result,
     ...(request.call_id ? { call_id: request.call_id } : {}),
@@ -464,6 +466,7 @@ function compactToolCall(call: ToolCallRecord) {
     call_id: call.call_id,
     source: call.source,
     args: call.args,
+    input: call.input,
     result: {
       allowed: call.result.allowed,
       exit_code: call.result.exit_code,
@@ -974,6 +977,7 @@ export async function executeTask(taskId: string, by = "agent-hub") {
           result: call.result
         };
         if (call.artifact_path) result.artifact_path = call.artifact_path;
+        if (call.input) result.input = call.input;
         if (call.call_id) result.call_id = call.call_id;
         return result;
       }));

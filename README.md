@@ -210,11 +210,12 @@ curl -s http://127.0.0.1:8000/api/platforms
 | `Z3GH0NE_LOCAL_AGENT_TOKEN` | 可选 local-agent Token | 空 |
 | `Z3GH0NE_UPLOADS_DIR` | 上传文件目录 | `.runtime-data/uploads` |
 | `Z3GH0NE_WORKSPACES_DIR` | 工具执行工作目录 | `.runtime-data/workspaces` |
+| `Z3GH0NE_TOOL_MAX_OUTPUT_CHARS` | 单次工具输出回灌模型的最大字符数，超出后保留头尾并标记截断 | `100000` |
 
 配置文件位于 `config/`：
 
 - `agent-policy.yaml`：允许的模式和阻断关键词
-- `tool-registry.yaml`：工具白名单、风险等级、是否需要 Target、超时时间和默认命令
+- `tool-registry.yaml`：工具白名单、工具类型、风险等级、是否需要 Target、超时时间、输出上限和默认命令
 
 Match Backend 环境变量：
 
@@ -224,10 +225,9 @@ Match Backend 环境变量：
 | `CTF_PLATFORM_PORT` | Match Backend 监听端口 | `8000` |
 | `CTF_PLATFORM_DATA_DIR` | Match Backend 运行时数据目录 | `backend/match_backend/.runtime` |
 
-## 安全设计说明
+## 运行时数据说明
 
-- 工具执行必须经过 `ToolDispatcher`，项目不提供通用裸 shell 执行接口。
-- 网络类工具需要显式提供 Target，不再限制域名后缀或目标作用域。
+- 工具输出会按 `Z3GH0NE_TOOL_MAX_OUTPUT_CHARS` 或工具级 `max_output_chars` 截断，避免大输出挤爆模型上下文。
 - Task/Report 文件读取会先校验 `taskId` 必须为 UUID，避免路径穿越。
 - 运行时数据、日志、pycache、构建产物、`node_modules` 和 `.external/` 不应进入 Git。
 - `backend/match_backend/.runtime/`、`.sessions/`、`downloads/`、`work/`、`.pytest_cache/` 不应进入 Git。

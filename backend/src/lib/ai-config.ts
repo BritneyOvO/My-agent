@@ -89,6 +89,10 @@ export type AiToolCallRequest = {
   tool: string;
   target?: string;
   artifact_path?: string;
+  query?: string;
+  allowed_domains?: string[];
+  blocked_domains?: string[];
+  input?: Record<string, unknown>;
   args: string[];
   call_id?: string;
   raw?: Record<string, unknown>;
@@ -119,6 +123,7 @@ export type AiNativeToolResult = {
   tool: string;
   target?: string | null;
   artifact_path?: string;
+  input?: Record<string, unknown>;
   args: string[];
   call_id?: string;
   result: Record<string, unknown>;
@@ -233,6 +238,7 @@ export function serializeAiToolResult(call: AiNativeToolResult) {
     tool: call.tool,
     target: call.target ?? null,
     artifact_path: call.artifact_path,
+    input: call.input,
     args: call.args,
     result: call.result
   });
@@ -532,6 +538,15 @@ function normalizeAiToolCall(value: unknown, raw?: Record<string, unknown>): AiT
   const request: AiToolCallRequest = { tool, args: toStringArray(record.args), ...(raw ? { raw } : {}) };
   if (typeof record.target === "string" && record.target.trim()) request.target = record.target.trim();
   if (typeof record.artifact_path === "string" && record.artifact_path.trim()) request.artifact_path = record.artifact_path.trim();
+  if (typeof record.query === "string" && record.query.trim()) request.query = record.query.trim();
+  if (Array.isArray(record.allowed_domains)) request.allowed_domains = toStringArray(record.allowed_domains);
+  if (Array.isArray(record.blocked_domains)) request.blocked_domains = toStringArray(record.blocked_domains);
+  if (record.input && typeof record.input === "object" && !Array.isArray(record.input)) request.input = record.input as Record<string, unknown>;
+  const structuredInput = Object.fromEntries(Object.entries(record).filter(([key]) => [
+    "file_path", "content", "old_string", "new_string", "replace_all", "pattern", "path", "glob", "output_mode",
+    "head_limit", "offset", "limit", "multiline", "type", "context", "-A", "-B", "-C", "-i", "-n"
+  ].includes(key)));
+  if (Object.keys(structuredInput).length) request.input = { ...(request.input ?? {}), ...structuredInput };
   if (typeof record.call_id === "string" && record.call_id.trim()) request.call_id = record.call_id.trim();
   return request;
 }
@@ -596,8 +611,20 @@ function aiToolNames() {
   return new ToolRegistry().list().filter((tool) => tool.available).map((tool) => tool.name);
 }
 
+function aiToolPromptCatalog() {
+  return new ToolRegistry().list()
+    .filter((tool) => tool.available)
+    .map((tool) => `${tool.name}: ${String(tool.prompt ?? tool.description ?? "").trim()}`)
+    .join("\n\n");
+}
+
 function runToolDescription() {
-  return "运行 Agent Hub 后端白名单中的工具。web_search 用于搜索公网最新资料；文件类工具必须提供 artifact_path 或真实本地路径参数；网络类工具必须提供 target。";
+  return [
+    "运行 Agent Hub 后端工具。Read/Write/Edit/Glob/Grep/LS 使用 input 结构化参数；web_search 用 query；artifact_path、target 和 args 会按调度器规则追加到对应命令。",
+    "",
+    "Tool usage:",
+    aiToolPromptCatalog()
+  ].join("\n");
 }
 
 function runToolParameters() {
@@ -611,6 +638,23 @@ function runToolParameters() {
       blocked_domains: { type: "array", items: { type: "string" }, description: "web_search 可选：排除这些域名" },
       target: { type: "string", description: "URL 或 Host，仅用于 whatweb/nmap/ffuf 等网络工具" },
       artifact_path: { type: "string", description: "上传目录中的附件文件名，或后端可访问的本地绝对路径；用于 file/strings/readelf/objdump/exiftool/binwalk/解压工具/tshark_summary，或交给 python 执行上传的 .py 脚本" },
+      input: {
+        type: "object",
+        description: "Read/Write/Edit/Glob/Grep/LS 的结构化参数对象，例如 {file_path, content, old_string, new_string, replace_all, pattern, path, output_mode, offset, limit}",
+        additionalProperties: true
+      },
+      file_path: { type: "string", description: "文件工具快捷参数：文件路径" },
+      content: { type: "string", description: "Write 快捷参数：完整文件内容" },
+      old_string: { type: "string", description: "Edit 快捷参数：要替换的原文本" },
+      new_string: { type: "string", description: "Edit 快捷参数：替换后的文本" },
+      replace_all: { type: "boolean", description: "Edit 快捷参数：替换全部匹配" },
+      pattern: { type: "string", description: "Glob/Grep 快捷参数：glob 或正则模式" },
+      path: { type: "string", description: "Glob/Grep/LS 快捷参数：搜索或列目录路径" },
+      glob: { type: "string", description: "Grep 快捷参数：文件 glob 过滤" },
+      output_mode: { type: "string", enum: ["content", "files_with_matches", "count"], description: "Grep 输出模式" },
+      offset: { type: "number", description: "Read/Grep 分页偏移" },
+      limit: { type: "number", description: "Read 行数限制" },
+      head_limit: { type: "number", description: "Grep/Glob 输出数量限制，0 表示不限制" },
       args: { type: "array", items: { type: "string" }, description: '额外参数；不要把 target 重复放进 args。python 可使用 ["-c", "短 Python 代码"]' }
     },
     required: ["tool"],

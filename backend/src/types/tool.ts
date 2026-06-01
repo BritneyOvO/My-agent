@@ -7,12 +7,13 @@ export type ToolRunRequest = {
   query?: string;
   allowed_domains?: string[];
   blocked_domains?: string[];
+  input?: Record<string, unknown>;
   args: string[];
 };
 
 export const toolRunRequestSchema = {
-  parse(input: unknown): ToolRunRequest {
-    const body = requireObject(input);
+  parse(value: unknown): ToolRunRequest {
+    const body = requireObject(value);
     const tool = readString(body.tool, "tool", 1, 80);
     const mode = readString(body.mode ?? "local_lab", "mode", 1, 120);
     const target = readOptionalString(body.target, "target", 1, 50000);
@@ -21,6 +22,7 @@ export const toolRunRequestSchema = {
     const query = readOptionalString(body.query, "query", 1, 50000);
     const allowedDomains = readOptionalStringArray(body.allowed_domains, "allowed_domains", 64, 300);
     const blockedDomains = readOptionalStringArray(body.blocked_domains, "blocked_domains", 64, 300);
+    const toolInput = readOptionalRecord(body.input, "input");
     const args = readStringArray(body.args ?? [], "args", 256, 200000);
     const result: ToolRunRequest = { tool, mode, args };
     if (target !== undefined) {
@@ -40,6 +42,9 @@ export const toolRunRequestSchema = {
     }
     if (blockedDomains !== undefined) {
       result.blocked_domains = blockedDomains;
+    }
+    if (toolInput !== undefined) {
+      result.input = toolInput;
     }
     return result;
   }
@@ -84,4 +89,14 @@ function readOptionalStringArray(input: unknown, field: string, maxItems: number
     return undefined;
   }
   return readStringArray(input, field, maxItems, maxLength);
+}
+
+function readOptionalRecord(input: unknown, field: string) {
+  if (input === undefined || input === null) {
+    return undefined;
+  }
+  if (typeof input !== "object" || Array.isArray(input)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return input as Record<string, unknown>;
 }

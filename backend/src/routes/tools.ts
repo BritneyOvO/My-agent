@@ -30,6 +30,7 @@ export function registerToolRoutes(app: AppInstance) {
         tool: req.tool,
         target: req.target ?? null,
         args: req.args,
+        ...(req.input ? { tool_input: req.input } : {}),
         result: result as Record<string, unknown>
       });
     }

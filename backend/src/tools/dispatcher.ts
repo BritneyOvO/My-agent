@@ -4,6 +4,7 @@ import path from "node:path";
 import { env } from "../lib/env.js";
 import { readAiConfig } from "../lib/ai-config.js";
 import { ToolRegistry } from "./registry.js";
+import { isFileOperationTool, runFileOperationTool } from "./file-ops.js";
 import type { ToolRunRequest } from "../types/tool.js";
 
 const extractTools = new Set([
@@ -25,8 +26,11 @@ type ToolResult = {
   output?: string;
   raw?: Record<string, unknown>;
   truncated?: boolean;
+  output_chars?: number;
   timeout_used?: number;
 };
+
+const defaultMaxOutputChars = Math.max(1000, Number.parseInt(process.env.Z3GH0NE_TOOL_MAX_OUTPUT_CHARS ?? "100000", 10));
 
 export class ToolDispatcher {
   private readonly registry = new ToolRegistry();
@@ -58,12 +62,27 @@ export class ToolDispatcher {
     }
 
     if (request.tool === "web_search") {
-      return this.runWebSearch(request, Number(meta.timeout ?? 45));
+      return this.runWebSearch(request, Number(meta.timeout ?? 45), Number(meta.max_output_chars ?? defaultMaxOutputChars));
     }
 
-    if (meta.requires_target) {
-      if (!request.target) {
-        return this.error("target_missing", "this tool requires a target");
+    if (isFileOperationTool(request.tool)) {
+      try {
+        const result = await runFileOperationTool(request);
+        const output = result.output;
+        const truncated = truncateMiddle(output, Number(meta.max_output_chars ?? defaultMaxOutputChars));
+        const response: ToolResult = {
+          allowed: true,
+          tool: request.tool,
+          exit_code: result.exit_code,
+          output: truncated.text,
+          truncated: truncated.truncated,
+          output_chars: output.length,
+          timeout_used: Number(meta.timeout ?? 30)
+        };
+        if (result.raw) response.raw = result.raw;
+        return response;
+      } catch (error) {
+        return this.error("file_op_error", error instanceof Error ? error.message.slice(0, 500) : "unknown file operation error");
       }
     }
 
@@ -78,16 +97,23 @@ export class ToolDispatcher {
         // 解压类工具默认在压缩包所在目录执行，避免解压到全局 workspaces 后 AI 误判路径。
         cwd = path.dirname(artifactPath);
       }
-      command.push(artifactPath);
+      if (request.tool !== "r2") {
+        command.push(artifactPath);
+      }
     }
 
     if (request.target) {
       command.push(request.target);
     }
 
-    command.push(...request.args);
+    if (request.tool === "r2" && resolvedArtifactPath) {
+      command.push(...(request.args.length ? request.args : ["-A", "-c", "iI", "-c", "afl", "-c", "izz", "-c", "q"]), resolvedArtifactPath);
+    } else {
+      command.push(...request.args);
+    }
 
     const timeout = Number(meta.timeout ?? 30);
+    const maxOutputChars = Number(meta.max_output_chars ?? defaultMaxOutputChars);
     const [binary, ...args] = command;
     if (!binary) {
       return this.error("invalid_tool", "tool command is empty");
@@ -98,13 +124,13 @@ export class ToolDispatcher {
         const child = spawn(binary, args, {
           cwd,
           stdio: ["ignore", "pipe", "pipe"]
-	        });
-	        let output = "";
-	        let settled = false;
-	        let timedOut = false;
-	        const append = (chunk: Buffer | string) => {
-	          output += chunk.toString();
-	        };
+        });
+        let output = "";
+        let settled = false;
+        let timedOut = false;
+        const append = (chunk: Buffer | string) => {
+          output += chunk.toString();
+        };
         child.stdout?.on("data", append);
         child.stderr?.on("data", append);
         const timer = setTimeout(() => {
@@ -129,16 +155,19 @@ export class ToolDispatcher {
             finish(this.error("timeout", `tool exceeded ${timeout}s timeout`));
             return;
           }
+          const finalOutput = extractTools.has(request.tool) && resolvedArtifactPath
+            ? `${output}${output.endsWith("\n") ? "" : "\n"}[agent-hub] extract_cwd=${cwd}\n`
+            : output;
+          const truncated = truncateMiddle(finalOutput, maxOutputChars);
           finish({
             allowed: true,
             tool: request.tool,
             exit_code: code,
-	            output: extractTools.has(request.tool) && resolvedArtifactPath
-	              ? `${output}${output.endsWith("\n") ? "" : "\n"}[agent-hub] extract_cwd=${cwd}\n`
-	              : output,
-	            truncated: false,
-	            timeout_used: timeout
-	          });
+            output: truncated.text,
+            truncated: truncated.truncated,
+            output_chars: finalOutput.length,
+            timeout_used: timeout
+          });
         });
       });
     } catch (error) {
@@ -152,7 +181,7 @@ export class ToolDispatcher {
     }
   }
 
-  private async runWebSearch(request: ToolRunRequest, timeout: number): Promise<ToolResult> {
+  private async runWebSearch(request: ToolRunRequest, timeout: number, maxOutputChars: number): Promise<ToolResult> {
     const query = request.query?.trim() || request.target?.trim() || request.args.join(" ").trim();
     if (!query) {
       return this.error("query_missing", "web_search requires query, target, or args");
@@ -216,14 +245,16 @@ export class ToolDispatcher {
         answer || "<empty answer>",
         sources.length ? `\nSources:\n${sources.map((url) => `- ${url}`).join("\n")}` : ""
       ].filter(Boolean).join("\n");
+      const truncated = truncateMiddle(output, maxOutputChars);
 
       return {
         allowed: true,
         tool: request.tool,
         exit_code: 0,
-        output,
+        output: truncated.text,
         raw: compactWebSearchRaw(data),
-        truncated: false,
+        truncated: truncated.truncated,
+        output_chars: output.length,
         timeout_used: timeout
       };
     } catch (error) {
@@ -235,6 +266,20 @@ export class ToolDispatcher {
       clearTimeout(timer);
     }
   }
+}
+
+function truncateMiddle(text: string, maxChars: number) {
+  if (!Number.isFinite(maxChars) || maxChars <= 0 || text.length <= maxChars) {
+    return { text, truncated: false };
+  }
+  const marker = "\n...[truncated output; showing head and tail]...\n";
+  const budget = Math.max(0, maxChars - marker.length);
+  const head = Math.ceil(budget * 0.65);
+  const tail = Math.floor(budget * 0.35);
+  return {
+    text: `${text.slice(0, head)}${marker}${tail > 0 ? text.slice(-tail) : ""}`,
+    truncated: true
+  };
 }
 
 function parseJsonRecord(text: string) {

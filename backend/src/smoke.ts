@@ -23,6 +23,7 @@ try {
   const auth = { Authorization: `Bearer ${token}` };
   const health = await getJson(`${base}/health`);
   const unauthTools = await fetch(`${base}/tools`);
+  const toolList = await getJson(`${base}/tools`, auth);
   const hub = await getJson(`${base}/hub/info`, auth);
   const task = await postJson(`${base}/tasks`, auth, {
     mode: "ctf_challenge",
@@ -40,6 +41,7 @@ try {
   console.log(JSON.stringify({
     healthOk: health.ok,
     unauthToolsStatus: unauthTools.status,
+    toolCount: Array.isArray(toolList.tools) ? toolList.tools.length : 0,
     hubUser: hub.user,
     taskId: task.task_id,
     status: status.status,
