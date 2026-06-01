@@ -621,6 +621,8 @@ function aiToolPromptCatalog() {
 function runToolDescription() {
   return [
     "运行 Agent Hub 后端工具。Read/Write/Edit/Glob/Grep/LS 使用 input 结构化参数；web_search 用 query；artifact_path、target 和 args 会按调度器规则追加到对应命令。",
+    "APK/Reverse 任务优先使用 aapt_dump、jadx_decompile、apktool_decode、readelf_symbols、r2_native_scan、strings_grep；禁止先跑全量 strings/readelf -a/objdump -d/r2 大反汇编。",
+    "大输出必须先用 grep/head/filter、Grep head_limit、Read offset/limit 或具体 r2 symbol/address 缩小，再回灌给模型。",
     "",
     "Tool usage:",
     aiToolPromptCatalog()
@@ -637,7 +639,7 @@ function runToolParameters() {
       allowed_domains: { type: "array", items: { type: "string" }, description: "web_search 可选：只包含这些域名" },
       blocked_domains: { type: "array", items: { type: "string" }, description: "web_search 可选：排除这些域名" },
       target: { type: "string", description: "URL 或 Host，仅用于 whatweb/nmap/ffuf 等网络工具" },
-      artifact_path: { type: "string", description: "上传目录中的附件文件名，或后端可访问的本地绝对路径；用于 file/strings/readelf/objdump/exiftool/binwalk/解压工具/tshark_summary，或交给 python 执行上传的 .py 脚本" },
+      artifact_path: { type: "string", description: "上传目录中的附件文件名，或后端可访问的本地绝对路径；用于 file/strings_grep/readelf_symbols/r2_native_scan/jadx_decompile/apktool_decode/aapt_dump/objdump/exiftool/binwalk/解压工具/tshark_summary，或交给 python 执行上传的 .py 脚本" },
       input: {
         type: "object",
         description: "Read/Write/Edit/Glob/Grep/LS 的结构化参数对象，例如 {file_path, content, old_string, new_string, replace_all, pattern, path, output_mode, offset, limit}",
@@ -655,7 +657,7 @@ function runToolParameters() {
       offset: { type: "number", description: "Read/Grep 分页偏移" },
       limit: { type: "number", description: "Read 行数限制" },
       head_limit: { type: "number", description: "Grep/Glob 输出数量限制，0 表示不限制" },
-      args: { type: "array", items: { type: "string" }, description: '额外参数；不要把 target 重复放进 args。python 可使用 ["-c", "短 Python 代码"]' }
+      args: { type: "array", items: { type: "string" }, description: '额外参数；不要把 target 重复放进 args。strings_grep/readelf_symbols 用 ["regex","limit"]；r2 用 ["-A","-c","pdf @ sym.name"] 等聚焦命令；python 可使用 ["-c", "短 Python 代码"]' }
     },
     required: ["tool"],
     additionalProperties: false

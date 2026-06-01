@@ -57,6 +57,15 @@ type ExtractedStepPair = {
   output?: ExtractedStepSnippet;
 };
 
+type ErrorDialog = {
+  title: string;
+  message: string;
+  status?: number;
+  method?: string;
+  url?: string;
+  payload?: unknown;
+};
+
 function clippedJson(value: unknown, max = 6000) {
   const text = JSON.stringify(value, null, 2);
   return text.length > max ? `${text.slice(0, max)}\n...<truncated>` : text;
@@ -205,6 +214,7 @@ function extractStepSnippets(thought: string): { text: string; snippets: Extract
     const args = Array.isArray(call.args) ? call.args.map((item) => String(item)) : [];
     const target = typeof call.target === "string" ? call.target : "";
     const artifact = typeof call.artifact_path === "string" ? call.artifact_path : "";
+    const input = call.input && typeof call.input === "object" && !Array.isArray(call.input) ? call.input : null;
 
     if (tool === "python" && args[0] === "-c" && typeof args[1] === "string") {
       snippets.push({ title: "python -c", language: "python", code: args[1] });
@@ -214,6 +224,7 @@ function extractStepSnippets(thought: string): { text: string; snippets: Extract
     const commandParts = [tool, ...args];
     if (target) commandParts.push(target);
     if (artifact) commandParts.push(artifact);
+    if (input) commandParts.push(JSON.stringify(input));
     snippets.push({ title: tool, language: "bash", code: commandParts.join(" ") });
   }
 
@@ -295,6 +306,7 @@ export default function App() {
   const [config, setConfig] = createSignal<ApiConfig>(loadConfig());
   const [busy, setBusy] = createSignal(false);
   const [output, setOutput] = createSignal<unknown>({ message: "控制台已就绪。登录 CTF 平台后会自动解析比赛列表。" });
+  const [errorDialog, setErrorDialog] = createSignal<ErrorDialog | null>(null);
   const [hubHealth, setHubHealth] = createSignal<unknown>(null);
   const [hubLoadedRoute, setHubLoadedRoute] = createSignal("");
   const [matchHealth, setMatchHealth] = createSignal<unknown>(null);
@@ -714,11 +726,27 @@ export default function App() {
       setOutput(() => value);
       return value;
     } catch (error) {
+      showRequestError(title, error);
       setOutput({ error: statusText(error), payload: error instanceof ApiError ? error.payload : null });
       return undefined;
     } finally {
       setBusy(false);
     }
+  }
+
+  function showRequestError(title: string, error: unknown) {
+    const payload = error instanceof ApiError
+      ? error.payload
+      : error instanceof Error
+        ? { name: error.name, message: error.message }
+        : error;
+    setErrorDialog({
+      title,
+      message: statusText(error),
+      ...(error instanceof ApiError ? { status: error.status } : {}),
+      ...(error instanceof ApiError ? { method: error.request.method, url: error.request.url } : {}),
+      payload
+    });
   }
 
   async function loadAiApiConfig() {
@@ -760,7 +788,7 @@ export default function App() {
   async function refreshHub() {
     await run("刷新 Agent Hub", async () => {
       const [health, info, taskList, toolList] = await Promise.all([
-        fetch(`${config().hubBase}/health`).then((r) => r.json()),
+        hubGet(config(), "/health"),
         hubGet(config(), "/hub/info"),
         hubGet(config(), "/tasks?limit=20"),
         hubGet(config(), "/tools")
@@ -1064,7 +1092,7 @@ export default function App() {
 	    const challenge = selectedChallenge();
 	    const meta = selectedChallengeMeta();
 	    return [
-	      "请作为 CTF 自动解题 Agent 解这道题。默认中文输出，积极使用可用工具分析附件/靶机并尝试拿到 flag。",
+	      "请作为 CTF 自动解题 Agent 解这道题。默认中文输出，积极使用可用工具分析附件/靶机并尝试拿到 flag。解出后无需手动提交，平台提交由系统自动处理。",
 	      "",
 	      "## 题目信息",
 	      `题目 ID: ${selectedChallengeId()}`,
@@ -1150,7 +1178,13 @@ export default function App() {
         prompt,
         target: targetAddress || undefined,
         priority: "high",
-        tags: ["ctf", selectedPlatform(), selectedChallengeMeta().direction, selectedChallenge()?.title || selectedChallengeId()].filter(Boolean)
+        tags: ["ctf", selectedPlatform(), selectedChallengeMeta().direction, selectedChallenge()?.title || selectedChallengeId()].filter(Boolean),
+        ctf_context: {
+          auto_submit: true,
+          session_id: sessionId(),
+          challenge_id: selectedChallengeId(),
+          contest_id: cid || undefined
+        }
       });
       return { task, attachment_paths: attachmentPaths, target: targetAddress, prep_errors: prepErrors };
     }, (value: any) => {
@@ -1184,6 +1218,36 @@ export default function App() {
           <button class={tab() === "settings" ? "active" : ""} onClick={() => navigate({ tab: "settings" })}>设置</button>
         </nav>
       </header>
+
+      <Show when={errorDialog()}>
+        {(dialog) => (
+          <div class="modal-backdrop" onClick={() => setErrorDialog(null)}>
+            <section class="modal-card glass error-modal" onClick={(event) => event.stopPropagation()}>
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Backend Error</p>
+                  <h2>后端请求失败</h2>
+                </div>
+                <button class="ghost" onClick={() => setErrorDialog(null)}>关闭</button>
+              </div>
+              <div class="error-summary">
+                <span><b>{dialog().status ?? "ERR"}</b><small>状态</small></span>
+                <span><b>{dialog().title}</b><small>请求</small></span>
+                <Show when={dialog().url}>
+                  <span class="error-url"><b>{dialog().method || "GET"} {dialog().url}</b><small>地址</small></span>
+                </Show>
+              </div>
+              <pre class="task-text error">{dialog().message}</pre>
+              <Show when={dialog().payload !== undefined && dialog().payload !== null}>
+                <section class="task-detail-section">
+                  <h3>返回内容</h3>
+                  <pre class="task-text">{clippedJson(dialog().payload, 12000)}</pre>
+                </section>
+              </Show>
+            </section>
+          </div>
+        )}
+      </Show>
 
       <section class="page-shell">
         <section class="content">

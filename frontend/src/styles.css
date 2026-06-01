@@ -551,9 +551,28 @@ button.danger { color: #9c1c36; border-color: rgba(224,49,84,.28); }
   border-radius: 24px;
   padding: 20px;
 }
+.error-modal { width: min(720px, 100%); }
+.error-summary {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.error-summary span {
+  border: 1px solid rgba(224,49,84,.22);
+  border-radius: 15px;
+  background: rgba(224,49,84,.06);
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+.error-summary b { color: #7d1630; overflow-wrap: anywhere; }
+.error-summary small { color: var(--muted); }
+.error-summary .error-url { grid-column: 1 / -1; }
 .modal-card .account-platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 16px 0; }
 @media (max-width: 780px) {
   .account-grid { grid-template-columns: 1fr; }
+  .error-summary { grid-template-columns: 1fr; }
   .modal-card .account-platform-grid { grid-template-columns: 1fr; }
 }
 .markdown-body div { color: #203047; line-height: 1.7; overflow-wrap: anywhere; }

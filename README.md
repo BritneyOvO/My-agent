@@ -211,6 +211,8 @@ curl -s http://127.0.0.1:8000/api/platforms
 | `Z3GH0NE_UPLOADS_DIR` | 上传文件目录 | `.runtime-data/uploads` |
 | `Z3GH0NE_WORKSPACES_DIR` | 工具执行工作目录 | `.runtime-data/workspaces` |
 | `Z3GH0NE_TOOL_MAX_OUTPUT_CHARS` | 单次工具输出回灌模型的最大字符数，超出后保留头尾并标记截断 | `100000` |
+| `Z3GH0NE_MATCH_API_BASE` | Hub 自动提交 Flag 时访问 Match Backend 的地址 | `http://127.0.0.1:${CTF_PLATFORM_PORT:-8000}` |
+| `Z3GH0NE_AUTO_SUBMIT_TIMEOUT_MS` | Hub 自动提交 Flag 的 HTTP 超时 | `20000` |
 
 配置文件位于 `config/`：
 

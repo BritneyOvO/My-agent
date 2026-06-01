@@ -1,11 +1,13 @@
 import path from "node:path";
 import { readdir } from "node:fs/promises";
 import { audit } from "../core/audit.js";
+import { env } from "../lib/env.js";
 import { ensureDir, readJsonFile, writeJsonFile } from "../lib/fs.js";
 import { taskFilePath, tasksDir } from "../lib/task-path.js";
 import { appendAiToolResults, appendAiUserMessage, createAiToolLoopState, getAiToolLoopTranscript, readAiConfig, runAiCompletion, type AiCompletionResult, type AiNativeToolResult, type AiStreamEvent, type AiToolCallRequest } from "../lib/ai-config.js";
 import { ToolDispatcher } from "../tools/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
+import type { CtfContext } from "../types/task.js";
 import type { ToolRunRequest } from "../types/tool.js";
 import { isContextLengthAiError, maybeCompactAiContext } from "./context-manager.js";
 import { publishTaskEvent } from "./task-events.js";
@@ -31,6 +33,7 @@ type StoredTask = {
   created_at: string;
   updated_at: string;
   created_by: string;
+  ctf_context?: CtfContext;
   history: TaskHistoryEntry[];
   comments: unknown[];
   artifacts: unknown[];
@@ -79,7 +82,8 @@ const staleRunningMs = Number.parseInt(process.env.Z3GH0NE_TASK_STALE_MS ?? "600
 const maxHistoryChars = Number.parseInt(process.env.Z3GH0NE_AGENT_HISTORY_CHARS ?? "14000", 10);
 const aiMaxRetries = Math.max(1, Number.parseInt(process.env.Z3GH0NE_AI_MAX_RETRIES ?? "5", 10));
 const aiStreamEnabled = process.env.Z3GH0NE_AI_STREAM !== "0";
-const flagPattern = /(?:flag|ctf|DASCTF|NSSCTF|BUU|GZCTF|XCTF)\{[^\r\n{}]{1,200}\}/gi;
+const autoSubmitTimeoutMs = Number.parseInt(process.env.Z3GH0NE_AUTO_SUBMIT_TIMEOUT_MS ?? "20000", 10);
+const flagPattern = /(?<![A-Za-z0-9_])(?:PCTF|DASCTF|NSSCTF|GZCTF|XCTF|BUU|flag|ctf)\{[^\r\n{}]{1,200}\}/gi;
 
 function nowIso() {
   return new Date().toISOString();
@@ -112,7 +116,7 @@ export async function appendTaskToolCall(taskId: string, input: {
   tool: string;
   target?: string | null;
   args: string[];
-  tool_input?: Record<string, unknown>;
+  input?: Record<string, unknown>;
   result: Record<string, unknown>;
 }) {
   const task = await loadTask(taskId);
@@ -125,7 +129,7 @@ export async function appendTaskToolCall(taskId: string, input: {
     tool: input.tool,
     target: input.target ?? null,
     args: input.args,
-    ...(input.tool_input ? { input: input.tool_input } : {}),
+    ...(input.input ? { input: input.input } : {}),
     result: input.result
   });
   result.tool_calls = calls;
@@ -188,6 +192,18 @@ function systemPrompt() {
     "",
     "默认中文输出。目标是解决 CTF 题目或推进到明确可执行的下一步，而不是泛泛建议。",
     "如果任务信息不足，要明确指出缺少什么；不要假装访问了没有提供的系统。",
+    "",
+    "CTF Reverse/APK 工作流约束：",
+    "- 如果附件是 APK/AAR/DEX 或 Reverse 题，先做定向 triage：file/unzip_list -> aapt_dump 或 jadx_decompile/apktool_decode -> 在反编译目录 Grep 入口类、check/flag/native/JNI/encrypt/decrypt。",
+    "- APK 内有 native .so 时，优先 file/readelf_symbols/nm/r2_native_scan 定位 JNI_OnLoad、Java_*、RegisterNatives、check/flag/encrypt/decrypt 相关符号，再用 r2 只看具体函数或地址。",
+    "- 禁止先跑全量 strings 分析 APK、classes.dex、.so、ELF、JAR 或大文件；必须使用 strings_grep 加聚焦 regex 和 limit，或先用 jadx/apktool/aapt/r2_native_scan 缩小范围。",
+    "- 禁止 readelf -a、全量 objdump -d、全量 r2 反汇编作为探索第一步；使用 readelf_symbols、r2_native_scan、r2 的具体 symbol/address 命令。",
+    "- r2 命令中不要使用裸 `|`；把 izz~a|b 这类查询拆成多个 `-c izz~a`、`-c izz~b`。`pd N` 的 N 保持在 100 行以内。",
+    "- 如果 jadx/apktool/aapt 不可用，走 unzip -> classes.dex 精确 strings_grep/小脚本解析 -> native .so readelf_symbols/r2_native_scan，不要反复尝试缺失工具。",
+    "- 对 classes.dex 搜索时避免只搜 flag/check 这种泛词；优先搜包名、入口类、native 方法名、UI 提示字符串附近引用。",
+    "- 一旦定位到 checkFlag/equals/目标 hash/加密链，立即进入求解：写最小 Python solver、逆变换或小规模验证；不要继续枚举无关字符串、资源或库函数。",
+    "- 类似 Claude Code 的工具编排方式：搜索和读取都要默认分页/限量；任何 strings/readelf/objdump/r2/python 输出在回灌前先 grep/head/filter，只把能推进判断的片段交给模型。",
+    "- APK zip 清单只用于确认 classes.dex、AndroidManifest.xml、lib/*.so、assets 等关键入口；不要把 res/META-INF 全量清单当作分析材料。",
     "可用工具如下：",
     availableToolText(),
     "",
@@ -200,6 +216,7 @@ function systemPrompt() {
     "6. Read/Write/Edit/Glob/Grep/LS 是内建文件系统工具，可访问后端可访问的任意路径，不做工作区沙盒限制。结构化参数放入 input。",
     "7. 如果工具失败，基于错误反思并换路径；不要重复同样失败调用。",
     "8. 一次最多规划少量有依赖关系的工具调用。",
+    "9. 大输出工具默认最多回灌 8K-20K 字符；如果被截断，下一步必须改用更窄的 grep/head/filter、Read offset/limit、Grep head_limit 或具体 r2 地址/函数，而不是重复全量命令。",
   ].join("\n");
 }
 
@@ -414,6 +431,184 @@ function extractFlags(...texts: unknown[]) {
   return [...found];
 }
 
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function allDiscoveredFlags(finalText: string, finalFlags: string[], steps: AgentStepRecord[]) {
+  return uniqueStrings([
+    ...extractFlags(finalText),
+    ...finalFlags,
+    ...steps.flatMap((step) => step.flags)
+  ]);
+}
+
+function selectAutoSubmitFlag(finalText: string, finalFlags: string[], steps: AgentStepRecord[]) {
+  const finalTextFlags = extractFlags(finalText);
+  if (finalTextFlags.length === 1) {
+    return { flag: finalTextFlags[0], candidates: allDiscoveredFlags(finalText, finalFlags, steps), reason: "final_text_unique" };
+  }
+  if (finalFlags.length === 1) {
+    return { flag: finalFlags[0], candidates: allDiscoveredFlags(finalText, finalFlags, steps), reason: "final_flags_unique" };
+  }
+  const candidates = allDiscoveredFlags(finalText, finalFlags, steps);
+  if (candidates.length === 1) {
+    return { flag: candidates[0], candidates, reason: "single_discovered_flag" };
+  }
+  return { flag: "", candidates, reason: candidates.length ? "ambiguous_flags" : "no_flags" };
+}
+
+function parseJsonMaybe(text: string) {
+  try {
+    return text ? JSON.parse(text) as unknown : null;
+  } catch {
+    return text;
+  }
+}
+
+function submitStatusFromString(text: string): boolean | null {
+  const normalized = text.toLowerCase();
+  if (/(wrong|incorrect|invalid|failed|rejected|denied|error|not\s+accepted)/i.test(text)) {
+    return false;
+  }
+  if (/(^|[^a-z])(correct|accepted|success|successful|solved|passed)([^a-z]|$)/i.test(text) || normalized.includes("flagaccepted")) {
+    return true;
+  }
+  return null;
+}
+
+function acceptedFromSubmitResponse(value: unknown, seen = new Set<unknown>()): boolean | null {
+  if (typeof value === "string") {
+    return submitStatusFromString(value);
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (seen.has(value)) {
+    return null;
+  }
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  for (const key of ["accepted", "ok", "success", "correct", "solved"]) {
+    if (typeof record[key] === "boolean") {
+      return record[key];
+    }
+  }
+  for (const key of ["status", "state", "result", "message", "msg"]) {
+    const nested = record[key];
+    if (typeof nested === "string") {
+      const accepted = submitStatusFromString(nested);
+      if (accepted !== null) {
+        return accepted;
+      }
+    }
+  }
+  for (const key of ["data", "result", "submit_result", "raw", "response"]) {
+    const accepted = acceptedFromSubmitResponse(record[key], seen);
+    if (accepted !== null) {
+      return accepted;
+    }
+  }
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== "object") {
+      continue;
+    }
+    const accepted = acceptedFromSubmitResponse(nested, seen);
+    if (accepted !== null) {
+      return accepted;
+    }
+  }
+  return null;
+}
+
+async function postJsonWithTimeout(url: string, body: unknown) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), autoSubmitTimeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    const payload = parseJsonMaybe(text);
+    return { response, payload, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function maybeAutoSubmitFlag(task: StoredTask, finalText: string, finalFlags: string[], steps: AgentStepRecord[]) {
+  const context = task.ctf_context;
+  if (!context?.auto_submit) {
+    return null;
+  }
+  if (!context.session_id || !context.challenge_id) {
+    return {
+      enabled: true,
+      attempted: false,
+      status: "skipped",
+      reason: "missing_ctf_context"
+    };
+  }
+
+  const selection = selectAutoSubmitFlag(finalText, finalFlags, steps);
+  if (!selection.flag) {
+    return {
+      enabled: true,
+      attempted: false,
+      status: "skipped",
+      reason: selection.reason,
+      candidates: selection.candidates
+    };
+  }
+
+  const submittedAt = nowIso();
+  const base = env.matchApiBase.replace(/\/+$/, "");
+  const suffix = context.contest_id ? `?contest_id=${encodeURIComponent(context.contest_id)}` : "";
+  const url = `${base}/api/sessions/${encodeURIComponent(context.session_id)}/challenges/${encodeURIComponent(context.challenge_id)}/submit${suffix}`;
+
+  try {
+    const { response, payload, text } = await postJsonWithTimeout(url, { flag: selection.flag });
+    const accepted = response.ok ? acceptedFromSubmitResponse(payload) : false;
+    const result = {
+      enabled: true,
+      attempted: true,
+      status: response.ok ? "submitted" : "failed",
+      reason: selection.reason,
+      flag: selection.flag,
+      candidates: selection.candidates,
+      submitted_at: submittedAt,
+      accepted,
+      http_status: response.status,
+      response: payload
+    };
+    if (!response.ok) {
+      return {
+        ...result,
+        error: typeof payload === "string" ? payload.slice(0, 1000) : text.slice(0, 1000)
+      };
+    }
+    return result;
+  } catch (error) {
+    return {
+      enabled: true,
+      attempted: true,
+      status: "failed",
+      reason: selection.reason,
+      flag: selection.flag,
+      candidates: selection.candidates,
+      submitted_at: submittedAt,
+      accepted: null,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 async function runRequestedTool(task: StoredTask, request: ToolRequest): Promise<ToolCallRecord> {
   if (request.tool === "__invalid_tool_request__") {
     return {
@@ -458,26 +653,6 @@ async function runRequestedTool(task: StoredTask, request: ToolRequest): Promise
   };
 }
 
-function compactToolCall(call: ToolCallRecord) {
-  return {
-    tool: call.tool,
-    target: call.target,
-    artifact_path: call.artifact_path,
-    call_id: call.call_id,
-    source: call.source,
-    args: call.args,
-    input: call.input,
-    result: {
-      allowed: call.result.allowed,
-      exit_code: call.result.exit_code,
-      error_code: call.result.error_code,
-      error: call.result.error,
-      output: typeof call.result.output === "string" ? call.result.output.slice(0, 8000) : undefined,
-      truncated: call.result.truncated
-    }
-  };
-}
-
 function summarizeSteps(steps: AgentStepRecord[]) {
   const text = steps.map((step) => [
     `步骤 ${step.step}:`,
@@ -486,21 +661,6 @@ function summarizeSteps(steps: AgentStepRecord[]) {
     step.flags.length ? `疑似 Flag: ${step.flags.join(", ")}` : ""
   ].filter(Boolean).join("\n")).join("\n---\n");
   return text.length > maxHistoryChars ? text.slice(-maxHistoryChars) : text;
-}
-
-function buildAgentStepPrompt(task: StoredTask, steps: AgentStepRecord[]) {
-  if (!steps.length) return buildPrompt(task);
-  return [
-    buildPrompt(task),
-    "",
-    "执行历史摘要：",
-    summarizeSteps(steps),
-    "",
-    "请分析上一轮结果并决定下一步。",
-    "- 如果需要继续验证，调用最合适的工具。",
-    "- 如果已经能得出结论或发现 flag，直接输出最终答案。",
-    "- 不要重复执行完全相同且已经失败的工具调用。"
-  ].join("\n");
 }
 
 function mergeUsage(usages: Record<string, unknown>[]) {
@@ -1007,6 +1167,28 @@ export async function executeTask(taskId: string, by = "agent-hub") {
       step += 1;
     }
 
+    const discoveredFlags = allDiscoveredFlags(finalText, finalFlags, steps);
+    let autoSubmit: Awaited<ReturnType<typeof maybeAutoSubmitFlag>> = null;
+    if (task.ctf_context?.auto_submit) {
+      await persistActivity(taskId, {
+        phase: "auto_submit",
+        provider,
+        model,
+        message: "已得到最终答案，正在按题目上下文尝试自动提交 Flag。"
+      });
+      autoSubmit = await maybeAutoSubmitFlag(task, finalText, finalFlags, steps);
+      await audit("flag_auto_submit", {
+        user: by,
+        task_id: taskId,
+        challenge_id: task.ctf_context.challenge_id,
+        contest_id: task.ctf_context.contest_id ?? null,
+        attempted: autoSubmit?.attempted ?? false,
+        status: autoSubmit?.status ?? "disabled",
+        accepted: autoSubmit && "accepted" in autoSubmit ? autoSubmit.accepted : null,
+        reason: autoSubmit?.reason ?? null
+      });
+    }
+
     const finishedAt = nowIso();
     const latest = await loadTask(taskId);
     if (isTerminalStatus(latest.status)) {
@@ -1020,7 +1202,8 @@ export async function executeTask(taskId: string, by = "agent-hub") {
       model,
       current_activity: null,
       text: finalText,
-      flags: finalFlags,
+      flags: discoveredFlags,
+      ...(autoSubmit ? { auto_submit: autoSubmit } : {}),
       usage: mergeUsage(usages),
       ai_tool_request: lastAiToolRequest,
       ai_function_tool_calls: aiFunctionToolCalls,
@@ -1036,11 +1219,14 @@ export async function executeTask(taskId: string, by = "agent-hub") {
     };
     latest.status = "completed";
     latest.updated_at = finishedAt;
+    if (autoSubmit) {
+      latest.history.push({ ts: finishedAt, action: "flag_auto_submit", by, comment: `status=${autoSubmit.status} attempted=${String(autoSubmit.attempted)}` });
+    }
     latest.history.push({ ts: finishedAt, action: "executed", by, comment: `provider=${provider} model=${model} steps=${steps.length}` });
     latest.history.push({ ts: finishedAt, action: "status_change", by, from: "running", to: "completed" });
     await saveTask(latest);
-    await audit("task_executed", { user: by, task_id: taskId, provider: finalCompletion?.provider ?? provider, model: finalCompletion?.model ?? model, steps: steps.length, flags: finalFlags });
-    publishTaskEvent(taskId, "final", { task: latest, text: finalText, flags: finalFlags });
+    await audit("task_executed", { user: by, task_id: taskId, provider: finalCompletion?.provider ?? provider, model: finalCompletion?.model ?? model, steps: steps.length, flags: discoveredFlags, auto_submit_status: autoSubmit?.status ?? null });
+    publishTaskEvent(taskId, "final", { task: latest, text: finalText, flags: discoveredFlags, auto_submit: autoSubmit });
     return latest;
   } catch (error) {
     const failedAt = nowIso();

@@ -9,7 +9,7 @@ import { PolicyGate } from "../core/policy.js";
 import { audit } from "../core/audit.js";
 import { recoverActiveTasks, scheduleTaskExecution, stopTaskExecution } from "../agents/executor.js";
 import { compactTaskForEvent, publishTaskEvent, subscribeTaskEvents, type TaskEvent } from "../agents/task-events.js";
-import { taskCommentSchema, taskRequestSchema, taskRetrySchema, taskStatusUpdateSchema, type TaskRequest } from "../types/task.js";
+import { taskCommentSchema, taskRequestSchema, taskRetrySchema, taskStatusUpdateSchema, type CtfContext, type TaskRequest } from "../types/task.js";
 
 type TaskHistoryEntry = {
   ts: string;
@@ -48,6 +48,7 @@ type StoredTask = {
   created_at: string;
   updated_at: string;
   created_by: string;
+  ctf_context?: CtfContext;
   history: TaskHistoryEntry[];
   comments: TaskCommentEntry[];
   artifacts: TaskArtifactEntry[];
@@ -87,6 +88,7 @@ function buildTaskRecord(req: TaskRequest, user: string) {
     created_at: now,
     updated_at: now,
     created_by: user,
+    ...(req.ctf_context ? { ctf_context: req.ctf_context } : {}),
     history: [{ ts: now, action: "created", by: user }],
     comments: [],
     artifacts: [],

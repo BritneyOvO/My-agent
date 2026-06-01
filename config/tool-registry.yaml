@@ -60,21 +60,35 @@ tools:
     risk: low
     requires_target: false
     timeout: 20
-    max_output_chars: 80000
+    max_output_chars: 8000
+  strings_grep:
+    command: ["scripts/strings_grep.sh"]
+    kind: android_reverse
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 16000
   readelf:
-    command: ["readelf", "-a"]
+    command: ["readelf"]
     kind: binary
     risk: low
     requires_target: false
     timeout: 20
-    max_output_chars: 120000
+    max_output_chars: 20000
+  readelf_symbols:
+    command: ["scripts/readelf_symbols.sh"]
+    kind: binary
+    risk: low
+    requires_target: false
+    timeout: 20
+    max_output_chars: 16000
   objdump:
-    command: ["objdump", "-d"]
+    command: ["objdump"]
     kind: binary
     risk: low
     requires_target: false
     timeout: 30
-    max_output_chars: 120000
+    max_output_chars: 16000
   exiftool:
     command: ["exiftool"]
     kind: forensic
@@ -93,6 +107,7 @@ tools:
     risk: low
     requires_target: false
     timeout: 30
+    max_output_chars: 20000
   unzip:
     command: ["unzip", "-o"]
     kind: archive
@@ -154,14 +169,42 @@ tools:
     requires_target: false
     timeout: 60
   r2:
-    command: ["/usr/local/bin/r2", "-q", "-e", "scr.color=false", "-e", "scr.utf8=false"]
+    command: ["/usr/local/bin/r2"]
     kind: binary
     risk: medium
     requires_target: false
     timeout: 120
-    max_output_chars: 120000
+    max_output_chars: 16000
+  r2_native_scan:
+    command: ["/usr/local/bin/r2", "-q", "-e", "scr.color=false", "-e", "scr.utf8=false", "-A", "-c", "iI", "-c", "ii~JNI", "-c", "ii~Java_", "-c", "ii~RegisterNatives", "-c", "ii~JNI_OnLoad", "-c", "afl~Java_", "-c", "afl~JNI", "-c", "afl~flag", "-c", "afl~check", "-c", "afl~encrypt", "-c", "afl~decrypt", "-c", "afl~main", "-c", "izz~flag", "-c", "izz~ctf", "-c", "izz~key", "-c", "izz~JNI", "-c", "izz~eazy", "-c", "izz~correct", "-c", "izz~wrong", "-c", "izz~success", "-c", "izz~error", "-c", "q"]
+    kind: android_reverse
+    risk: low
+    requires_target: false
+    timeout: 120
+    max_output_chars: 20000
+  jadx_decompile:
+    command: ["scripts/jadx_decompile.sh"]
+    kind: android_reverse
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 20000
+  apktool_decode:
+    command: ["scripts/apktool_decode.sh"]
+    kind: android_reverse
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 20000
+  aapt_dump:
+    command: ["scripts/aapt_dump.sh"]
+    kind: android_reverse
+    risk: low
+    requires_target: false
+    timeout: 60
+    max_output_chars: 16000
   tshark_summary:
-    command: ["tshark", "-r"]
+    command: ["tshark"]
     kind: forensic
     risk: low
     requires_target: false
@@ -174,27 +217,337 @@ tools:
     requires_target: false
     timeout: 60
   curl:
-    command: ["curl", "-i", "-L", "-sS", "--max-time", "30", "--connect-timeout", "8"]
+    command: ["curl"]
     kind: network
     risk: medium
-    requires_target: true
+    requires_target: false
     timeout: 40
     max_output_chars: 80000
-  whatweb:
-    command: ["whatweb", "--no-errors"]
+  wget:
+    command: ["wget"]
     kind: network
     risk: medium
-    requires_target: true
+    requires_target: false
+    timeout: 120
+    max_output_chars: 80000
+  nc:
+    command: ["nc"]
+    kind: network
+    risk: medium
+    requires_target: false
+    timeout: 60
+    max_output_chars: 80000
+  whatweb:
+    command: ["whatweb"]
+    kind: network
+    risk: medium
+    requires_target: false
     timeout: 60
   nmap:
-    command: ["nmap", "-sV", "--top-ports", "100"]
+    command: ["nmap"]
     kind: network
     risk: medium
-    requires_target: true
+    requires_target: false
     timeout: 120
+    max_output_chars: 120000
   ffuf:
-    command: ["ffuf", "-u"]
+    command: ["ffuf"]
     kind: network
     risk: medium
-    requires_target: true
+    requires_target: false
     timeout: 120
+    max_output_chars: 120000
+  xxd:
+    command: ["xxd"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 120000
+  hexdump:
+    command: ["hexdump"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 120000
+  nm:
+    command: ["nm"]
+    kind: binary
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 12000
+  gdb:
+    command: ["gdb"]
+    kind: debug
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  ltrace:
+    command: ["ltrace"]
+    kind: debug
+    risk: medium
+    requires_target: false
+    timeout: 60
+    max_output_chars: 120000
+  strace:
+    command: ["strace"]
+    kind: debug
+    risk: medium
+    requires_target: false
+    timeout: 60
+    max_output_chars: 120000
+  steghide:
+    command: ["steghide"]
+    kind: steg
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  stegseek:
+    command: ["stegseek"]
+    kind: steg
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  zsteg:
+    command: ["zsteg"]
+    kind: steg
+    risk: low
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  pngcheck:
+    command: ["pngcheck"]
+    kind: media
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 80000
+  identify:
+    command: ["identify"]
+    kind: media
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 80000
+  convert:
+    command: ["convert"]
+    kind: media
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 80000
+  montage:
+    command: ["montage"]
+    kind: media
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 80000
+  tesseract:
+    command: ["tesseract"]
+    kind: media
+    risk: low
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  ffmpeg:
+    command: ["ffmpeg"]
+    kind: media
+    risk: medium
+    requires_target: false
+    timeout: 180
+    max_output_chars: 120000
+  sox:
+    command: ["sox"]
+    kind: media
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  mmls:
+    command: ["mmls"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 60
+    max_output_chars: 120000
+  fls:
+    command: ["fls"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 60
+    max_output_chars: 120000
+  icat:
+    command: ["icat"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 60
+    max_output_chars: 120000
+  tsk_recover:
+    command: ["tsk_recover"]
+    kind: forensic
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  fsstat:
+    command: ["fsstat"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 60
+    max_output_chars: 120000
+  foremost:
+    command: ["foremost"]
+    kind: forensic
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  testdisk:
+    command: ["testdisk"]
+    kind: forensic
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  xfs_db:
+    command: ["xfs_db"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 60
+    max_output_chars: 120000
+  xfs_repair:
+    command: ["xfs_repair"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  dcfldd:
+    command: ["dcfldd"]
+    kind: forensic
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  vol:
+    command: ["vol"]
+    kind: forensic
+    risk: low
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  openssl:
+    command: ["openssl"]
+    kind: crypto
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  RsaCtfTool:
+    command: ["RsaCtfTool"]
+    kind: crypto
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  sage:
+    command: ["sage"]
+    kind: crypto
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  cado-nfs:
+    command: ["cado-nfs"]
+    kind: crypto
+    risk: medium
+    requires_target: false
+    timeout: 600
+    max_output_chars: 120000
+  flatter:
+    command: ["flatter"]
+    kind: crypto
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  gcc:
+    command: ["gcc"]
+    kind: build
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  g++:
+    command: ["g++"]
+    kind: build
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  make:
+    command: ["make"]
+    kind: build
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  cmake:
+    command: ["cmake"]
+    kind: build
+    risk: medium
+    requires_target: false
+    timeout: 300
+    max_output_chars: 120000
+  jq:
+    command: ["jq"]
+    kind: data
+    risk: low
+    requires_target: false
+    timeout: 30
+    max_output_chars: 120000
+  zip:
+    command: ["zip"]
+    kind: archive
+    risk: medium
+    requires_target: false
+    timeout: 120
+    max_output_chars: 120000
+  git:
+    command: ["git"]
+    kind: vcs
+    risk: medium
+    requires_target: false
+    timeout: 180
+    max_output_chars: 120000
+  podman:
+    command: ["podman"]
+    kind: container
+    risk: high
+    requires_target: false
+    timeout: 600
+    max_output_chars: 120000
+  podman-compose:
+    command: ["podman-compose"]
+    kind: container
+    risk: high
+    requires_target: false
+    timeout: 600
+    max_output_chars: 120000
+  buildah:
+    command: ["buildah"]
+    kind: container
+    risk: high
+    requires_target: false
+    timeout: 600
+    max_output_chars: 120000

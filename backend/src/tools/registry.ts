@@ -28,13 +28,22 @@ export class ToolRegistry {
     this.tools = raw.tools ?? {};
   }
 
-  private commandAvailable(command: string[]) {
+  private binaryAvailable(binary: string) {
+    const paths = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+    return paths.some((dir) => existsSync(path.join(dir, binary)));
+  }
+
+  private commandAvailable(name: string, command: string[]) {
     const binary = command[0];
     if (!binary) return false;
     if (binary.startsWith("__builtin_")) return true;
-    if (binary.includes("/")) return existsSync(binary);
-    const paths = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-    return paths.some((dir) => existsSync(path.join(dir, binary)));
+    const dependencies = toolRuntimeDependencies[name] ?? [];
+    if (dependencies.some((dependency) => !this.binaryAvailable(dependency))) return false;
+    if (binary.includes("/")) {
+      const resolvedBinary = path.isAbsolute(binary) ? binary : path.resolve(env.baseDir, binary);
+      return existsSync(resolvedBinary);
+    }
+    return this.binaryAvailable(binary);
   }
 
   private normalize(name: string, meta: ToolMeta): ToolMeta & Required<Pick<ToolMeta, "requires_target" | "timeout">> {
@@ -47,9 +56,17 @@ export class ToolRegistry {
     };
   }
 
+  private withPrompt(name: string, meta: ToolMeta & Required<Pick<ToolMeta, "requires_target" | "timeout">>) {
+    return {
+      ...meta,
+      description: meta.description ?? toolPromptSummary(name),
+      prompt: meta.prompt ?? toolPrompt(name)
+    };
+  }
+
   list() {
     return Object.entries(this.tools).map(([name, meta]) => {
-      const normalized = this.normalize(name, meta);
+      const normalized = this.withPrompt(name, this.normalize(name, meta));
       return {
         name,
         risk: normalized.risk,
@@ -57,9 +74,9 @@ export class ToolRegistry {
         requires_target: normalized.requires_target,
         timeout: normalized.timeout,
         max_output_chars: normalized.max_output_chars,
-        description: normalized.description ?? toolPromptSummary(name),
-        prompt: normalized.prompt ?? toolPrompt(name),
-        available: this.commandAvailable(normalized.command),
+        description: normalized.description,
+        prompt: normalized.prompt,
+        available: this.commandAvailable(name, normalized.command),
         binary: normalized.command[0] ?? ""
       };
     });
@@ -68,21 +85,54 @@ export class ToolRegistry {
   get(name: string) {
     const meta = this.tools[name];
     const normalized = meta ? this.normalize(name, meta) : undefined;
-    return normalized ? {
-      ...normalized,
-      description: normalized.description ?? toolPromptSummary(name),
-      prompt: normalized.prompt ?? toolPrompt(name)
-    } : undefined;
+    return normalized ? this.withPrompt(name, normalized) : undefined;
   }
 }
 
+const toolRuntimeDependencies: Record<string, string[]> = {
+  strings_grep: ["strings", "rg"],
+  readelf_symbols: ["readelf", "rg"],
+  jadx_decompile: ["jadx"],
+  apktool_decode: ["apktool"],
+  aapt_dump: ["aapt"],
+  r2_native_scan: ["r2"]
+};
+
 function inferKind(name: string) {
   if (name === "web_search") return "search";
-  if (["Read", "Write", "Edit", "Glob", "Grep", "LS", "file_read", "file_write", "file_edit", "glob", "grep", "ls"].includes(name)) return "filesystem";
-  if (["curl", "whatweb", "nmap", "ffuf"].includes(name)) return "network";
+  if (["jadx_decompile", "apktool_decode", "aapt_dump", "strings_grep", "r2_native_scan"].includes(name)) return "android_reverse";
+  if (["Read", "Write", "Edit", "Glob", "Grep", "LS"].includes(name)) return "filesystem";
+  if (["curl", "wget", "nc", "whatweb", "nmap", "ffuf"].includes(name)) return "network";
   if (name === "python") return "code";
-  if (/extract|decompress|unzip|7z|rar|tar|gzip|bzip2|xz/.test(name)) return "archive";
-  if (["readelf", "objdump", "r2"].includes(name)) return "binary";
-  if (["file", "strings", "exiftool", "binwalk", "tshark_summary"].includes(name)) return "forensic";
+  if (/extract|decompress|unzip|7z|rar|tar|gzip|bzip2|xz|zip/.test(name)) return "archive";
+  if (["readelf", "objdump", "r2", "nm"].includes(name)) return "binary";
+  if (["gdb", "ltrace", "strace"].includes(name)) return "debug";
+  if (["steghide", "stegseek", "zsteg"].includes(name)) return "steg";
+  if (["identify", "convert", "montage", "tesseract", "ffmpeg", "sox", "pngcheck"].includes(name)) return "media";
+  if (["openssl", "RsaCtfTool", "sage", "cado-nfs", "flatter"].includes(name)) return "crypto";
+  if (["gcc", "g++", "make", "cmake"].includes(name)) return "build";
+  if (["podman", "podman-compose", "buildah"].includes(name)) return "container";
+  if (["git"].includes(name)) return "vcs";
+  if (["jq"].includes(name)) return "data";
+  if ([
+    "file",
+    "strings",
+    "xxd",
+    "hexdump",
+    "exiftool",
+    "binwalk",
+    "tshark_summary",
+    "mmls",
+    "fls",
+    "icat",
+    "tsk_recover",
+    "fsstat",
+    "foremost",
+    "testdisk",
+    "xfs_db",
+    "xfs_repair",
+    "dcfldd",
+    "vol"
+  ].includes(name)) return "forensic";
   return "generic";
 }

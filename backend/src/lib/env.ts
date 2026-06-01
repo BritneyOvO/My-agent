@@ -16,6 +16,7 @@ export const env = {
   adminToken: process.env.Z3GH0NE_ADMIN_TOKEN ?? "",
   localAgentUser: process.env.Z3GH0NE_LOCAL_AGENT_USER ?? "local-agent",
   localAgentToken: process.env.Z3GH0NE_LOCAL_AGENT_TOKEN ?? "",
+  matchApiBase: process.env.Z3GH0NE_MATCH_API_BASE ?? `http://127.0.0.1:${process.env.CTF_PLATFORM_PORT ?? "8000"}`,
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   port: Number.parseInt(process.env.PORT ?? "8080", 10),
   uploadsDir: resolveEnvPath(process.env.Z3GH0NE_UPLOADS_DIR, path.resolve(process.cwd(), ".runtime-data", "uploads")),

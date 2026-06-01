@@ -14,31 +14,33 @@ type BuiltinResult = {
 
 const defaultReadLimit = 2000;
 const defaultSearchLimit = 250;
+const fileOperationTools = new Set(["Read", "Write", "Edit", "Glob", "Grep", "LS"]);
+const fileOperationCommands: Record<string, string> = {
+  __builtin_file_read: "Read",
+  __builtin_file_write: "Write",
+  __builtin_file_edit: "Edit",
+  __builtin_glob: "Glob",
+  __builtin_grep: "Grep",
+  __builtin_ls: "LS"
+};
 
 export function isFileOperationTool(name: string) {
-  return ["Read", "Write", "Edit", "Glob", "Grep", "LS", "file_read", "file_write", "file_edit", "glob", "grep", "ls"].includes(name);
+  return fileOperationTools.has(name);
+}
+
+export function fileOperationToolName(tool: string, command: string | undefined) {
+  if (isFileOperationTool(tool)) return tool;
+  return command ? fileOperationCommands[command] : undefined;
 }
 
 export async function runFileOperationTool(request: ToolRunRequest): Promise<BuiltinResult> {
-  const tool = normalizeToolName(request.tool);
-  if (tool === "Read") return readTool(request);
-  if (tool === "Write") return writeTool(request);
-  if (tool === "Edit") return editTool(request);
-  if (tool === "Glob") return globTool(request);
-  if (tool === "Grep") return grepTool(request);
-  if (tool === "LS") return lsTool(request);
+  if (request.tool === "Read") return readTool(request);
+  if (request.tool === "Write") return writeTool(request);
+  if (request.tool === "Edit") return editTool(request);
+  if (request.tool === "Glob") return globTool(request);
+  if (request.tool === "Grep") return grepTool(request);
+  if (request.tool === "LS") return lsTool(request);
   throw new Error(`unsupported file operation tool: ${request.tool}`);
-}
-
-function normalizeToolName(name: string) {
-  const lowered = name.toLowerCase();
-  if (lowered === "file_read") return "Read";
-  if (lowered === "file_write") return "Write";
-  if (lowered === "file_edit") return "Edit";
-  if (lowered === "glob") return "Glob";
-  if (lowered === "grep") return "Grep";
-  if (lowered === "ls") return "LS";
-  return name;
 }
 
 function inputValue(request: ToolRunRequest, key: string) {

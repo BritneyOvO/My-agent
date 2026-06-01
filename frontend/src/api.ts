@@ -12,15 +12,43 @@ export type RequestOptions = {
   token?: string;
 };
 
+export type ApiErrorRequest = {
+  method: string;
+  url: string;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   readonly payload: unknown;
+  readonly request: ApiErrorRequest;
 
-  constructor(status: number, message: string, payload: unknown) {
+  constructor(status: number, message: string, payload: unknown, request: ApiErrorRequest) {
     super(message);
     this.status = status;
     this.payload = payload;
+    this.request = request;
   }
+}
+
+function parsePayload(text: string) {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return text;
+  }
+}
+
+function describePayload(payload: unknown, fallback: string) {
+  if (typeof payload === "object" && payload && "detail" in payload) {
+    const detail = (payload as { detail: unknown }).detail;
+    return typeof detail === "string" ? detail : JSON.stringify(detail);
+  }
+  if (typeof payload === "object" && payload && "message" in payload) {
+    const message = (payload as { message: unknown }).message;
+    return typeof message === "string" ? message : JSON.stringify(message);
+  }
+  if (typeof payload === "string" && payload.trim()) return payload.trim().slice(0, 1000);
+  return fallback || "Backend request failed";
 }
 
 async function request(base: string, path: string, options: RequestOptions = {}) {
@@ -31,21 +59,19 @@ async function request(base: string, path: string, options: RequestOptions = {})
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(options.body);
   }
-  const response = await fetch(`${base}${path}`, {
-    method: options.method ?? (body ? "POST" : "GET"),
-    headers,
-    body
-  });
-  const text = await response.text();
-  let payload: unknown = text;
+  const method = options.method ?? (body ? "POST" : "GET");
+  const url = `${base}${path}`;
+  let response: Response;
   try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = text;
+    response = await fetch(url, { method, headers, body });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ApiError(0, message || "Network request failed", { error: message }, { method, url });
   }
+  const text = await response.text();
+  const payload = parsePayload(text);
   if (!response.ok) {
-    const detail = typeof payload === "object" && payload && "detail" in payload ? String((payload as { detail: unknown }).detail) : response.statusText;
-    throw new ApiError(response.status, detail, payload);
+    throw new ApiError(response.status, describePayload(payload, response.statusText), payload, { method, url });
   }
   return payload;
 }

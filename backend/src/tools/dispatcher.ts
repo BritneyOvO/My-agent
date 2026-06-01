@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { env } from "../lib/env.js";
 import { readAiConfig } from "../lib/ai-config.js";
 import { ToolRegistry } from "./registry.js";
-import { isFileOperationTool, runFileOperationTool } from "./file-ops.js";
+import { fileOperationToolName, runFileOperationTool } from "./file-ops.js";
 import type { ToolRunRequest } from "../types/tool.js";
 
 const extractTools = new Set([
@@ -31,6 +31,34 @@ type ToolResult = {
 };
 
 const defaultMaxOutputChars = Math.max(1000, Number.parseInt(process.env.Z3GH0NE_TOOL_MAX_OUTPUT_CHARS ?? "100000", 10));
+const noisyBinaryExtensions = new Set([".apk", ".aar", ".jar", ".dex", ".so", ".elf", ".bin"]);
+const noisyStringsBytes = Number.parseInt(process.env.Z3GH0NE_STRINGS_BULK_BLOCK_BYTES ?? "524288", 10);
+const r2DefaultFocusedArgs = [
+  "-q",
+  "-A",
+  "-c", "iI",
+  "-c", "ii~JNI",
+  "-c", "ii~Java_",
+  "-c", "ii~RegisterNatives",
+  "-c", "ii~JNI_OnLoad",
+  "-c", "afl~JNI",
+  "-c", "afl~Java_",
+  "-c", "afl~flag",
+  "-c", "afl~check",
+  "-c", "afl~encrypt",
+  "-c", "afl~decrypt",
+  "-c", "afl~main",
+  "-c", "izz~flag",
+  "-c", "izz~ctf",
+  "-c", "izz~key",
+  "-c", "izz~JNI",
+  "-c", "izz~eazy",
+  "-c", "izz~correct",
+  "-c", "izz~wrong",
+  "-c", "izz~success",
+  "-c", "izz~error",
+  "-c", "q"
+];
 
 export class ToolDispatcher {
   private readonly registry = new ToolRegistry();
@@ -55,6 +83,72 @@ export class ToolDispatcher {
     return candidates.find((candidate) => existsSync(candidate)) ?? rawPath;
   }
 
+  private resolveCommandBinary(binary: string): string {
+    if (!binary.includes("/") || path.isAbsolute(binary)) return binary;
+    return path.resolve(env.baseDir, binary);
+  }
+
+  private localPathFromRequest(request: ToolRunRequest, resolvedArtifactPath: string) {
+    if (resolvedArtifactPath) return resolvedArtifactPath;
+    const candidate = [...request.args].reverse().find((arg) => (
+      arg.startsWith("/") || arg.startsWith(".") || noisyBinaryExtensions.has(path.extname(arg).toLowerCase())
+    ));
+    if (!candidate) return "";
+    return this.resolveArtifactPath(candidate);
+  }
+
+  private blockNoisyToolRequest(request: ToolRunRequest, resolvedArtifactPath: string): ToolResult | null {
+    if (request.tool === "strings" && process.env.Z3GH0NE_ALLOW_BULK_STRINGS !== "1") {
+      const filePath = this.localPathFromRequest(request, resolvedArtifactPath);
+      const ext = path.extname(filePath).toLowerCase();
+      const size = safeFileSize(filePath);
+      if (noisyBinaryExtensions.has(ext) || size > noisyStringsBytes) {
+        return this.error(
+          "bulk_strings_blocked",
+          [
+            "Full strings output is blocked for large binary/APK/DEX/native files.",
+            "Use strings_grep with a focused regex, or jadx_decompile/apktool_decode/aapt_dump for APKs.",
+            "Example: strings_grep artifact_path=<file> args=[\"flag|ctf|JNI|Java_|check|encrypt\", \"200\"]."
+          ].join(" ")
+        );
+      }
+    }
+
+    if (request.tool === "readelf" && request.args.some((arg) => arg === "-a" || arg === "--all")) {
+      return this.error(
+        "bulk_readelf_blocked",
+        "readelf -a is too noisy for agent loops. Use readelf_symbols for symbols, or pass targeted readelf args such as -h, -S, -d, -r, or -s."
+      );
+    }
+
+    if (request.tool === "objdump" && request.args.some((arg) => arg === "-d" || arg === "--disassemble") && !request.args.some((arg) => arg.startsWith("--disassemble="))) {
+      return this.error(
+        "bulk_objdump_blocked",
+        "Full objdump disassembly is blocked. Use r2_native_scan first, then r2 with a specific function/address or objdump --disassemble=<symbol>."
+      );
+    }
+
+    if (request.tool === "r2") {
+      const commands = r2CommandsFromArgs(request.args);
+      const unsafeCommand = commands.find((command) => command.includes("|"));
+      if (unsafeCommand) {
+        return this.error(
+          "r2_pipe_blocked",
+          `r2 command '${unsafeCommand}' contains a raw pipe character. Use multiple focused -c commands instead, for example '-c izz~flag' and '-c izz~ctf', or escape/filter outside r2.`
+        );
+      }
+      const noisyCommand = commands.find(isNoisyR2Command);
+      if (noisyCommand) {
+        return this.error(
+          "bulk_r2_blocked",
+          `r2 command '${noisyCommand}' is too broad for agent loops. Use r2_native_scan first, then focused commands such as 'afl~check', 'izz~flag', 'pdf @ sym.name', 'pd 80 @ 0xADDR', or 'axt @ 0xADDR'.`
+        );
+      }
+    }
+
+    return null;
+  }
+
   async run(request: ToolRunRequest): Promise<ToolResult> {
     const meta = this.registry.get(request.tool);
     if (!meta) {
@@ -65,9 +159,10 @@ export class ToolDispatcher {
       return this.runWebSearch(request, Number(meta.timeout ?? 45), Number(meta.max_output_chars ?? defaultMaxOutputChars));
     }
 
-    if (isFileOperationTool(request.tool)) {
+    const builtinFileTool = fileOperationToolName(request.tool, meta.command[0]);
+    if (builtinFileTool) {
       try {
-        const result = await runFileOperationTool(request);
+        const result = await runFileOperationTool({ ...request, tool: builtinFileTool });
         const output = result.output;
         const truncated = truncateMiddle(output, Number(meta.max_output_chars ?? defaultMaxOutputChars));
         const response: ToolResult = {
@@ -107,14 +202,18 @@ export class ToolDispatcher {
     }
 
     if (request.tool === "r2" && resolvedArtifactPath) {
-      command.push(...(request.args.length ? request.args : ["-A", "-c", "iI", "-c", "afl", "-c", "izz", "-c", "q"]), resolvedArtifactPath);
+      command.push("-e", "scr.color=false", "-e", "scr.utf8=false", ...normalizeR2Args(request.args), resolvedArtifactPath);
     } else {
       command.push(...request.args);
     }
 
     const timeout = Number(meta.timeout ?? 30);
     const maxOutputChars = Number(meta.max_output_chars ?? defaultMaxOutputChars);
-    const [binary, ...args] = command;
+    const noisyPolicyError = this.blockNoisyToolRequest(request, resolvedArtifactPath);
+    if (noisyPolicyError) return noisyPolicyError;
+
+    const [rawBinary, ...args] = command;
+    const binary = rawBinary ? this.resolveCommandBinary(rawBinary) : "";
     if (!binary) {
       return this.error("invalid_tool", "tool command is empty");
     }
@@ -155,9 +254,10 @@ export class ToolDispatcher {
             finish(this.error("timeout", `tool exceeded ${timeout}s timeout`));
             return;
           }
-          const finalOutput = extractTools.has(request.tool) && resolvedArtifactPath
+          const rawFinalOutput = extractTools.has(request.tool) && resolvedArtifactPath
             ? `${output}${output.endsWith("\n") ? "" : "\n"}[agent-hub] extract_cwd=${cwd}\n`
             : output;
+          const finalOutput = postProcessToolOutput(request.tool, rawFinalOutput, resolvedArtifactPath);
           const truncated = truncateMiddle(finalOutput, maxOutputChars);
           finish({
             allowed: true,
@@ -268,11 +368,101 @@ export class ToolDispatcher {
   }
 }
 
+function safeFileSize(filePath: string) {
+  try {
+    return filePath && existsSync(filePath) ? statSync(filePath).size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function normalizeR2Args(args: string[]) {
+  const normalized = args.length ? [...args] : [...r2DefaultFocusedArgs];
+  const hasQuiet = normalized.includes("-q");
+  const hasQuitCommand = r2CommandsFromArgs(normalized).some((command) => command === "q" || command === "quit");
+  return [
+    ...(hasQuiet ? [] : ["-q"]),
+    ...normalized,
+    ...(hasQuitCommand ? [] : ["-c", "q"])
+  ];
+}
+
+function r2CommandsFromArgs(args: string[]) {
+  const commands: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "-c" && typeof args[index + 1] === "string") {
+      commands.push(...String(args[index + 1]).split(";").map((item) => item.trim()).filter(Boolean));
+      index += 1;
+    }
+  }
+  return commands;
+}
+
+function isNoisyR2Command(command: string) {
+  const normalized = command.trim();
+  if (!normalized || normalized === "q" || normalized === "quit") return false;
+  if (/^(izz?|izzz|afl|aflj|is|isj|ii|iij)$/i.test(normalized)) return true;
+  const pdCount = normalized.match(/^pd\s+(\d+)\b/i);
+  if (pdCount && Number(pdCount[1]) > 100) return true;
+  if (/^(pd|pD)\s*(?:$|\$\$|all\b)/i.test(normalized)) return true;
+  if (/^pdr\s*$/i.test(normalized)) return true;
+  return false;
+}
+
+function postProcessToolOutput(tool: string, output: string, resolvedArtifactPath: string) {
+  if (tool === "unzip_list" && /\.(apk|aar|jar)$/i.test(resolvedArtifactPath)) {
+    return summarizeAndroidZipListing(output);
+  }
+  if (tool === "unzip" && /\.(apk|aar|jar)$/i.test(resolvedArtifactPath)) {
+    return summarizeAndroidZipExtraction(output, resolvedArtifactPath);
+  }
+  return output;
+}
+
+function summarizeAndroidZipListing(output: string) {
+  const lines = output.split(/\r?\n/);
+  const header = lines.filter((line) => /^Archive:|^\s*Length\s+Date|^-{5,}/.test(line)).slice(0, 4);
+  const interesting = lines.filter((line) => (
+    /\b(AndroidManifest\.xml|classes\d*\.dex|resources\.arsc|DebugProbesKt\.bin)\b/.test(line) ||
+    /\s(lib\/[^/]+\/[^/\s]+\.so)\s*$/.test(line) ||
+    /\s(assets\/[^/\s]+|assets\/[^/]+\/[^/\s]+)\s*$/.test(line) ||
+    /\s(META-INF\/[^/\s]+\.(?:RSA|DSA|EC|SF|MF))\s*$/i.test(line)
+  ));
+  const totalEntries = lines.filter((line) => /^\s*\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+/.test(line)).length;
+  const body = interesting.slice(0, 240);
+  return [
+    "[agent-hub] APK/JAR archive listing summarized to avoid flooding context.",
+    `[agent-hub] total_entries=${totalEntries} shown_interesting=${body.length}`,
+    ...header,
+    ...body,
+    body.length < interesting.length ? `[agent-hub] ${interesting.length - body.length} additional interesting entries omitted; use a narrower archive/resource query if needed.` : "",
+    "[agent-hub] Prefer aapt_dump, jadx_decompile, apktool_decode, and r2_native_scan for APK/Reverse analysis instead of full archive listings."
+  ].filter(Boolean).join("\n");
+}
+
+function summarizeAndroidZipExtraction(output: string, resolvedArtifactPath: string) {
+  const lines = output.split(/\r?\n/);
+  const interesting = lines.filter((line) => (
+    /(?:extracting|inflating):\s+(AndroidManifest\.xml|classes\d*\.dex|resources\.arsc|DebugProbesKt\.bin)\s*$/.test(line) ||
+    /(?:extracting|inflating):\s+lib\/[^/]+\/[^/\s]+\.so\s*$/.test(line) ||
+    /(?:extracting|inflating):\s+assets\/[^/\s]+(?:\/[^/\s]+)?\s*$/.test(line)
+  ));
+  const extractedCount = lines.filter((line) => /(?:extracting|inflating):/.test(line)).length;
+  return [
+    "[agent-hub] APK/JAR extraction output summarized to avoid flooding context.",
+    `[agent-hub] archive=${resolvedArtifactPath}`,
+    `[agent-hub] extracted_entries=${extractedCount} shown_interesting=${interesting.length}`,
+    ...interesting.slice(0, 160),
+    interesting.length > 160 ? `[agent-hub] ${interesting.length - 160} additional interesting entries omitted.` : "",
+    "[agent-hub] Continue with Glob/Grep on specific paths, readelf_symbols/r2_native_scan for lib/*.so, and strings_grep with narrow regex for classes.dex."
+  ].filter(Boolean).join("\n");
+}
+
 function truncateMiddle(text: string, maxChars: number) {
   if (!Number.isFinite(maxChars) || maxChars <= 0 || text.length <= maxChars) {
     return { text, truncated: false };
   }
-  const marker = "\n...[truncated output; showing head and tail]...\n";
+  const marker = "\n...[truncated output; showing head and tail. Re-run with grep/head/filter or a narrower tool query before feeding more output back.]...\n";
   const budget = Math.max(0, maxChars - marker.length);
   const head = Math.ceil(budget * 0.65);
   const tail = Math.floor(budget * 0.35);
