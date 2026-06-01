@@ -33,8 +33,8 @@ class FakeApiPlatform:
     def current_user(self):
         return {"name": "api-user", "token": "secret-token", "profile": {"role": "player"}}
 
-    def list_contests(self, page=1, page_size=50, search=None):
-        return {"items": [{"id": "contest-1", "title": "Demo CTF"}], "page": page, "page_size": page_size, "search": search}
+    def list_contests(self, page=1, page_size=50, search=None, public=None):
+        return {"items": [{"id": "contest-1", "title": "Demo CTF"}], "page": page, "page_size": page_size, "search": search, "public": public}
 
     def get_contest(self, contest_id):
         return {"id": str(contest_id), "title": "Demo CTF", "status": "running"}
@@ -63,6 +63,12 @@ class FakeApiPlatform:
 
     def submit_flag(self, challenge_id, flag, contest_id=None):
         return {"accepted": flag == "flag{ok}", "challenge_id": str(challenge_id), "contest_id": contest_id, "flag": flag}
+
+    def start_target(self, challenge_id, contest_id=None):
+        return {"ok": True, "challenge_id": str(challenge_id), "contest_id": contest_id, "url": "http://target.local:10001"}
+
+    def close_target(self, challenge_id, contest_id=None):
+        return {"closed": True, "challenge_id": str(challenge_id), "contest_id": contest_id}
 
     def scoreboard(self, contest_id=None):
         return {"contest_id": contest_id, "rows": [{"rank": 1, "name": "team", "score": 100}]}
@@ -163,6 +169,14 @@ class ServerApiTests(unittest.TestCase):
         downloaded_path = Path(download.json()[0]["path"])
         self.assertTrue(downloaded_path.exists())
         self.assertTrue(str(downloaded_path).startswith(str(self.root / "downloads")))
+
+        target = self.client.post(f"/api/sessions/{session_id}/challenges/chal-1/target?contest_id=contest-1")
+        self.assertEqual(target.status_code, 200)
+        self.assertEqual(target.json()["url"], "http://target.local:10001")
+
+        close_target = self.client.delete(f"/api/sessions/{session_id}/challenges/chal-1/target?contest_id=contest-1")
+        self.assertEqual(close_target.status_code, 200)
+        self.assertTrue(close_target.json()["closed"])
 
         wrong = self.client.post(
             f"/api/sessions/{session_id}/challenges/chal-1/submit?contest_id=contest-1",

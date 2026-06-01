@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { env } from "../lib/env.js";
 import { parseToolRegistryYaml } from "../lib/yaml.js";
@@ -6,7 +6,7 @@ import { parseToolRegistryYaml } from "../lib/yaml.js";
 export type ToolMeta = {
   command: string[];
   risk?: string;
-  requires_scope?: boolean;
+  requires_target?: boolean;
   timeout?: number;
 };
 
@@ -23,12 +23,22 @@ export class ToolRegistry {
     this.tools = raw.tools ?? {};
   }
 
+  private commandAvailable(command: string[]) {
+    const binary = command[0];
+    if (!binary) return false;
+    if (binary.includes("/")) return existsSync(binary);
+    const paths = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+    return paths.some((dir) => existsSync(path.join(dir, binary)));
+  }
+
   list() {
     return Object.entries(this.tools).map(([name, meta]) => ({
       name,
       risk: meta.risk,
-      requires_scope: meta.requires_scope ?? false,
-      timeout: meta.timeout ?? 30
+      requires_target: meta.requires_target ?? false,
+      timeout: meta.timeout ?? 30,
+      available: this.commandAvailable(meta.command),
+      binary: meta.command[0] ?? ""
     }));
   }
 

@@ -6,6 +6,7 @@ import base64
 import json
 import re
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -334,6 +335,200 @@ class AdWorldClient:
         resp.raise_for_status()
         return self._unwrap(resp).get("data") or {}
 
+    def race_scene_dynamic(self, race_id: str, checkpoint_id: str, reference: str = "302") -> Dict[str, Any]:
+        """Return the dynamic connection information for a jeopardy race scene.
+
+        The challenge detail only exposes `with_scene` / `scene_config`; the
+        real player UI queries this endpoint after the scene exists to obtain
+        pwn/web connection strings.
+        """
+        resp = self._request(
+            "GET",
+            f"/api/ct/web/jeopardy_race/race/{race_id}/scenes/dynamic/{checkpoint_id}/",
+            params={"reference": reference},
+            want_json=True,
+        )
+        resp.raise_for_status()
+        return self._unwrap(resp).get("data") or {}
+
+    def open_race_scene(self, race_id: str, checkpoint_id: str, reference: str = "302") -> Dict[str, Any]:
+        """Start/open a jeopardy race scene and return parsed target addresses.
+
+        AdWorld challenge details expose both the logical checkpoint/resource id
+        and a nested ``scene_config.id``.  Different deployments use one or the
+        other for the dynamic-scene endpoint, so this method derives candidates
+        from the detail payload and tries them in a deterministic order.
+        """
+        detail = self.race_checkpoint_detail(race_id, checkpoint_id)
+        reference = self._scene_reference_from_detail(detail, reference)
+        dynamic_ids = self._scene_identifier_candidates(checkpoint_id, detail)
+
+        def query_dynamic() -> tuple[Dict[str, Any], str, List[str]]:
+            last: Dict[str, Any] = {}
+            for dynamic_id in dynamic_ids:
+                try:
+                    data = self.race_scene_dynamic(race_id, dynamic_id, reference=reference)
+                    addresses = self._collect_scene_addresses(data)
+                    if addresses:
+                        return data, dynamic_id, addresses
+                    last = data or {}
+                except Exception as exc:
+                    last = {"dynamic_id": dynamic_id, "error": str(exc)}
+            return last, dynamic_ids[0] if dynamic_ids else checkpoint_id, []
+
+        pre_dynamic, used_dynamic_id, addresses = query_dynamic()
+        if addresses:
+            return {
+                "kind": "race",
+                "race_id": race_id,
+                "checkpoint_id": checkpoint_id,
+                "dynamic_id": used_dynamic_id,
+                "reference": reference,
+                "detail": detail,
+                "scene_data": pre_dynamic,
+                "addresses": addresses,
+                "already_running": True,
+            }
+
+        start_payload: Dict[str, Any] = {}
+        start_error: Any = None
+        start_errors: List[str] = []
+        for payload in self._scene_start_payloads(checkpoint_id, detail, reference):
+            try:
+                start_resp = self._request(
+                    "POST",
+                    f"/api/ct/web/jeopardy_race/race/{race_id}/scenes/",
+                    json=payload,
+                    want_json=True,
+                )
+                if start_resp.status_code in (404, 405):
+                    start_errors.append(f"payload={payload}: HTTP {start_resp.status_code}")
+                    continue
+                start_resp.raise_for_status()
+                parsed = self._json(start_resp)
+                if not isinstance(parsed, dict):
+                    raise AdWorldError(f"Unexpected response shape from {start_resp.url}: {parsed!r}")
+                start_payload = parsed
+                returned_dynamic_ids = self._scene_dynamic_ids_from_payload(parsed)
+                if returned_dynamic_ids:
+                    dynamic_ids = self._merge_unique(returned_dynamic_ids, dynamic_ids)
+                code = parsed.get("code")
+                if code and not str(code).endswith("000000"):
+                    start_error = parsed.get("message") or parsed.get("detail") or parsed
+                    start_errors.append(f"payload={payload}: {start_error}")
+                    # Some quota/already-open responses still include the
+                    # running cscene/instance id; keep it and poll dynamic.
+                    if returned_dynamic_ids:
+                        break
+                    continue
+                break
+            except Exception as exc:
+                start_errors.append(f"payload={payload}: {exc}")
+                start_error = exc
+
+        # Some deployments do not put the cscene id in the POST response but
+        # do expose it after creation in the checkpoint detail. Re-read once
+        # before polling the dynamic endpoint.
+        try:
+            refreshed_detail = self.race_checkpoint_detail(race_id, checkpoint_id)
+            refreshed_ids = self._merge_unique(
+                self._scene_identifier_candidates(checkpoint_id, refreshed_detail),
+                self._scene_dynamic_ids_from_payload(refreshed_detail),
+            )
+            if refreshed_ids:
+                dynamic_ids = self._merge_unique(refreshed_ids, dynamic_ids)
+                detail = refreshed_detail
+                reference = self._scene_reference_from_detail(detail, reference)
+        except Exception as exc:
+            self.log("race checkpoint detail refresh after scene start failed", race_id, checkpoint_id, exc)
+
+        last_dynamic: Dict[str, Any] = {}
+        for attempt in range(8):
+            if attempt:
+                time.sleep(1)
+            last_dynamic, used_dynamic_id, addresses = query_dynamic()
+            if addresses:
+                return {
+                    "kind": "race",
+                    "race_id": race_id,
+                    "checkpoint_id": checkpoint_id,
+                    "dynamic_id": used_dynamic_id,
+                    "reference": reference,
+                    "detail": detail,
+                    "start_result": start_payload,
+                    "scene_data": last_dynamic,
+                    "addresses": addresses,
+                    "already_running": False,
+                }
+
+        if start_error and not start_payload:
+            raise AdWorldError(f"AdWorld race scene start failed: {start_error}; attempts={start_errors}; dynamic={last_dynamic or pre_dynamic}")
+        return {
+            "kind": "race",
+            "race_id": race_id,
+            "checkpoint_id": checkpoint_id,
+            "dynamic_id": used_dynamic_id,
+            "reference": reference,
+            "detail": detail,
+            "start_result": start_payload or {"attempt_errors": start_errors},
+            "scene_data": last_dynamic or pre_dynamic,
+            "addresses": self._collect_scene_addresses(last_dynamic or pre_dynamic or detail),
+            "already_running": False,
+        }
+
+    def close_race_scene(self, race_id: str, checkpoint_id: str, reference: str = "302") -> Dict[str, Any]:
+        """Close/delete a jeopardy race scene for the current player."""
+        errors: List[str] = []
+        detail: Dict[str, Any] = {}
+        try:
+            detail = self.race_checkpoint_detail(race_id, checkpoint_id)
+        except Exception as exc:
+            self.log("race checkpoint detail before close failed", race_id, checkpoint_id, exc)
+        reference = self._scene_reference_from_detail(detail, reference)
+        dynamic_ids = self._scene_identifier_candidates(checkpoint_id, detail) if detail else [checkpoint_id]
+        payloads = self._scene_start_payloads(checkpoint_id, detail, reference) if detail else [{"checkpoint_id": checkpoint_id}]
+
+        attempts: List[tuple[str, str, Dict[str, Any]]] = []
+        for payload in payloads:
+            attempts.append(("DELETE", f"/api/ct/web/jeopardy_race/race/{race_id}/scenes/", {"json": payload}))
+            attempts.append(("POST", f"/api/ct/web/jeopardy_race/race/{race_id}/scenes/close/", {"json": payload}))
+        for dynamic_id in dynamic_ids:
+            attempts.append(("DELETE", f"/api/ct/web/jeopardy_race/race/{race_id}/scenes/{dynamic_id}/", {}))
+
+        seen = set()
+        for method, path, kwargs in attempts:
+            key = (method, path, json.dumps(kwargs, ensure_ascii=False, sort_keys=True, default=str))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                resp = self._request(method, path, want_json=True, **kwargs)
+                if resp.status_code in (404, 405):
+                    errors.append(f"{method} {path}: HTTP {resp.status_code}")
+                    continue
+                resp.raise_for_status()
+                data = self._unwrap(resp).get("data") or {}
+                dynamic: Dict[str, Any] = {}
+                for dynamic_id in dynamic_ids:
+                    try:
+                        dynamic = self.race_scene_dynamic(race_id, dynamic_id, reference=reference)
+                        break
+                    except Exception as exc:
+                        dynamic = {"dynamic_id": dynamic_id, "error": str(exc)}
+                return {
+                    "kind": "race",
+                    "race_id": race_id,
+                    "checkpoint_id": checkpoint_id,
+                    "reference": reference,
+                    "closed": True,
+                    "close_result": data,
+                    "scene_data": dynamic,
+                    "addresses": self._collect_scene_addresses(dynamic),
+                }
+            except Exception as exc:
+                errors.append(f"{method} {path}: {exc}")
+        raise AdWorldError("AdWorld race scene close failed: " + "; ".join(errors))
+
     def practice_categories(self, practice_set_id: str, practice_type: int) -> List[Dict[str, Any]]:
         resp = self._request(
             "GET",
@@ -619,6 +814,147 @@ class AdWorldClient:
 
         raise AdWorldError(f"Cannot resolve AdWorld contest/practice target from id={contest_id!r}")
 
+
+    def _ensure_entered_target(self, target: Dict[str, Any]) -> None:
+        """Best-effort race enrollment before detail/scene APIs.
+
+        Some AdWorld race endpoints return 401 until the player has explicitly
+        entered/enrolled in the race.  Entering is idempotent enough for player
+        workflows, so adapters call this before challenge detail, target,
+        download and submit operations.
+        """
+        if target.get("kind") != "race":
+            return
+        try:
+            self.enter_race(str(target["id"]), int(target.get("category") or 2))
+        except Exception as exc:
+            self.log("race enter skipped/failed", target.get("id"), exc)
+
+    @staticmethod
+    def _scene_config_from_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+        scene = detail.get("scene_config")
+        return scene if isinstance(scene, dict) else {}
+
+    @classmethod
+    def _scene_reference_from_detail(cls, detail: Dict[str, Any], fallback: str = "302") -> str:
+        scene = cls._scene_config_from_detail(detail)
+        value = scene.get("reference_type") or scene.get("reference") or scene.get("referenceType") or fallback
+        return str(value)
+
+    @classmethod
+    def _scene_identifier_candidates(cls, checkpoint_id: str, detail: Dict[str, Any]) -> List[str]:
+        scene = cls._scene_config_from_detail(detail)
+        topology = scene.get("scene_config") if isinstance(scene.get("scene_config"), dict) else {}
+        topo_scene = topology.get("topology", {}).get("scene", {}) if isinstance(topology.get("topology"), dict) else {}
+        cscene = scene.get("cscene")
+        raw_values = [
+            checkpoint_id,
+            detail.get("challenge_id"),
+            detail.get("resource_id"),
+            detail.get("id"),
+            scene.get("id"),
+            scene.get("scene_id"),
+            cscene.get("id") if isinstance(cscene, dict) else cscene,
+            topo_scene.get("eid") if isinstance(topo_scene, dict) else None,
+        ]
+        out: List[str] = []
+        seen = set()
+        for value in raw_values:
+            text = str(value).strip() if value not in (None, "") else ""
+            if text and text not in seen:
+                seen.add(text)
+                out.append(text)
+        return out
+
+
+    @staticmethod
+    def _looks_like_hex_id(value: Any) -> bool:
+        return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-fA-F]{16,64}", value.strip()))
+
+    @classmethod
+    def _scene_dynamic_ids_from_payload(cls, payload: Any) -> List[str]:
+        """Extract possible dynamic scene instance ids from start/query payloads.
+
+        AdWorld's dynamic-scene endpoint is:
+          /race/<race_id>/scenes/dynamic/<dynamic_scene_id>/?reference=302
+
+        The <dynamic_scene_id> is not always the challenge id; in real traffic it
+        can be an instance/cscene id returned after POST /scenes/.  Keep this
+        broad but deterministic and prefer scene/cscene/id-like fields.
+        """
+        candidates: List[str] = []
+        seen = set()
+
+        preferred_key = re.compile(
+            r"^(cscene|scene|scene_id|sceneId|scene_inst|sceneInst|scene_instance|sceneInstance|"
+            r"dynamic_id|dynamicId|instance_id|instanceId|inst_id|instId|id|eid)$",
+            re.I,
+        )
+
+        def add(value: Any) -> None:
+            if isinstance(value, (int, float)):
+                value = str(int(value))
+            if not isinstance(value, str):
+                return
+            text = value.strip()
+            if not text or text in seen or not cls._looks_like_hex_id(text):
+                return
+            seen.add(text)
+            candidates.append(text)
+
+        def walk(obj: Any) -> None:
+            if isinstance(obj, dict):
+                # Directly named fields first.
+                for key, value in obj.items():
+                    if preferred_key.match(str(key)):
+                        if isinstance(value, dict):
+                            for nested_key in ("id", "eid", "scene_id", "instance_id"):
+                                add(value.get(nested_key))
+                        else:
+                            add(value)
+                # Then recurse into nested scene-bearing data.
+                for value in obj.values():
+                    walk(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    walk(value)
+
+        walk(payload)
+        return candidates
+
+    @staticmethod
+    def _merge_unique(*groups: List[str]) -> List[str]:
+        out: List[str] = []
+        seen = set()
+        for group in groups:
+            for value in group:
+                if value and value not in seen:
+                    seen.add(value)
+                    out.append(value)
+        return out
+
+    @classmethod
+    def _scene_start_payloads(cls, checkpoint_id: str, detail: Dict[str, Any], reference: str) -> List[Dict[str, Any]]:
+        scene = cls._scene_config_from_detail(detail)
+        scene_config_id = scene.get("id")
+        resource_id = detail.get("resource_id") or detail.get("challenge_id") or detail.get("id") or checkpoint_id
+        payloads: List[Dict[str, Any]] = [{"checkpoint_id": checkpoint_id}]
+        if scene_config_id:
+            payloads.extend([
+                {"checkpoint_id": checkpoint_id, "scene_config_id": scene_config_id, "reference": reference},
+                {"checkpoint_id": checkpoint_id, "scene_config_id": scene_config_id, "reference_type": reference},
+                {"resource_id": resource_id, "scene_config_id": scene_config_id, "reference": reference},
+                {"scene_config_id": scene_config_id, "reference": reference},
+            ])
+        deduped: List[Dict[str, Any]] = []
+        seen = set()
+        for payload in payloads:
+            key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(payload)
+        return deduped
+
     def contest_entry(self, contest_id_or_query: str) -> Dict[str, Any]:
         """Return normalized event/race entry for an exact contest/race id."""
         target = self.resolve_play_target(contest_id_or_query)
@@ -641,30 +977,222 @@ class AdWorldClient:
             return self.enter_race(target["id"], int(target.get("category") or 2))
         return {"success": True, "kind": "practice", "id": target["id"], "message": "practice set does not require enter"}
 
+
+    @staticmethod
+    def _challenge_items(data: Any) -> List[Dict[str, Any]]:
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+        if not isinstance(data, dict):
+            return []
+        for key in ("challenges", "checkpoints", "questions", "records", "rows", "list", "results", "items", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+            if isinstance(value, dict):
+                nested = AdWorldClient._challenge_items(value)
+                if nested:
+                    return nested
+        return []
+
+    @staticmethod
+    def _normalize_challenge_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        cid = item.get("challenge_id") or item.get("checkpoint_id") or item.get("resource_id") or item.get("problem_id") or item.get("pid") or item.get("id")
+        title = item.get("title") or item.get("name") or item.get("checkpoint_name") or item.get("resource_name") or item.get("problem_name") or cid
+        category = item.get("category") or item.get("category_name") or item.get("direction") or item.get("type_name") or item.get("type")
+        score = item.get("score") or item.get("points") or item.get("point") or item.get("value") or item.get("current_score")
+        normalized = dict(item)
+        if cid is not None:
+            normalized.setdefault("id", str(cid))
+            normalized.setdefault("challenge_id", str(cid))
+        if title is not None:
+            normalized.setdefault("title", str(title))
+            normalized.setdefault("name", str(title))
+        if category is not None:
+            normalized.setdefault("category", category)
+        if score is not None:
+            normalized.setdefault("score", score)
+        return normalized
+
+    @classmethod
+    def _normalize_challenge_listing(cls, data: Any, contest_id: str, kind: str) -> Dict[str, Any]:
+        items = [cls._normalize_challenge_item(item) for item in cls._challenge_items(data)]
+        total = data.get("total") if isinstance(data, dict) else None
+        if not isinstance(total, int):
+            total = len(items)
+        return {"contest_id": contest_id, "kind": kind, "challenges": items, "total": total, "raw": data}
+
     def contest_challenges(self, contest_id: str, page: int = 1, page_size: int = 50, search: str = "") -> Any:
         target = self.resolve_play_target(contest_id)
         if target["kind"] == "race":
-            return self.race_checkpoints(target["id"], query=search or "")
-        return self.operation_list(target["id"], pattern=search or "")
+            self._ensure_entered_target(target)
+            data = self.race_checkpoints(target["id"], query=search or "")
+            return self._normalize_challenge_listing(data, contest_id, "race")
+        data = self.operation_list(target["id"], pattern=search or "")
+        return self._normalize_challenge_listing(data, contest_id, "practice")
 
     def contest_challenge_detail(self, contest_id: Optional[str], challenge_id: str) -> Dict[str, Any]:
         if contest_id:
             target = self.resolve_play_target(contest_id)
             if target["kind"] == "race":
-                return self.race_checkpoint_detail(target["id"], challenge_id)
-        return self.operation_detail(challenge_id)
+                self._ensure_entered_target(target)
+                detail = self.race_checkpoint_detail(target["id"], challenge_id)
+                if detail:
+                    return self._normalize_challenge_item(detail)
+                listing = self.contest_challenges(contest_id)
+                for item in listing.get("challenges") or []:
+                    if str(item.get("id") or item.get("challenge_id") or item.get("checkpoint_id")) == str(challenge_id):
+                        return item
+                return detail
+        detail = self.operation_detail(challenge_id)
+        return self._normalize_challenge_item(detail) if detail else detail
 
     def contest_download_attachment(self, contest_id: Optional[str], challenge_id: str, outdir: str) -> List[DownloadedFile]:
         if contest_id:
             target = self.resolve_play_target(contest_id)
             if target["kind"] == "race":
+                self._ensure_entered_target(target)
                 return self.download_race_attachment(target["id"], challenge_id, outdir)
         return self.download_operation_attachment(challenge_id, outdir)
+
+
+    @staticmethod
+    def _collect_scene_addresses(scene: Any) -> List[str]:
+        addresses: List[str] = []
+        seen = set()
+
+        def add(value: Any) -> None:
+            if not isinstance(value, str):
+                return
+            text = value.strip()
+            if not text or text in seen:
+                return
+            if re.match(r"^(https?://|[A-Za-z0-9_.-]+:\d+|ncat\s+|nc\s+|ssh\s+|socat\s+|remote\()", text):
+                seen.add(text)
+                addresses.append(text)
+                return
+            remote = re.search(r"remote\([\"']([^\"']+)[\"']\s*,\s*(\d+)(.*)\)", text)
+            if remote:
+                host, port, opts = remote.groups()
+                ssl_flag = " --ssl" if "ssl=True" in opts.replace(" ", "") else ""
+                cmd = f"ncat{ssl_flag} {host} {port}"
+                if cmd not in seen:
+                    seen.add(cmd)
+                    addresses.append(cmd)
+
+        def walk(obj: Any) -> None:
+            if isinstance(obj, dict):
+                direct = obj.get("connection_url") or obj.get("url") or obj.get("target_url") or obj.get("target")
+                add(direct)
+                proto = obj.get("protocol") or obj.get("scheme")
+                host = obj.get("access_ip") or obj.get("ip") or obj.get("host") or obj.get("address")
+                port = obj.get("access_port") or obj.get("port")
+                path = obj.get("path") or ""
+                if host and port:
+                    if proto in ("http", "https"):
+                        add(f"{proto}://{host}:{port}{path or ''}")
+                    else:
+                        add(f"{host}:{port}")
+                for value in obj.values():
+                    walk(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    walk(value)
+            elif isinstance(obj, str):
+                add(obj)
+
+        walk(scene)
+        return addresses
+
+    def open_operation_scene(self, resource_id: str) -> Dict[str, Any]:
+        """Start/open an AdWorld practice operation scene and return raw scene data plus parsed endpoints."""
+        errors: List[str] = []
+        for method, path, kwargs in (
+            ("POST", "/api/ojj/oj/practice/operation/scene", {"json": {"resource_id": resource_id}}),
+            ("POST", f"/api/ad/practice/web/questions/{resource_id}/scene/", {}),
+        ):
+            try:
+                resp = self._request(method, path, want_json=True, **kwargs)
+                if resp.status_code in (404, 405):
+                    errors.append(f"{path}: HTTP {resp.status_code}")
+                    continue
+                resp.raise_for_status()
+                data = self._unwrap(resp).get("data") or {}
+                return {"kind": "practice", "resource_id": resource_id, "scene_data": data, "addresses": self._collect_scene_addresses(data)}
+            except Exception as exc:
+                errors.append(f"{path}: {exc}")
+        raise AdWorldError("AdWorld practice scene open failed: " + "; ".join(errors))
+
+    def get_operation_scene(self, resource_id: str) -> Dict[str, Any]:
+        errors: List[str] = []
+        for path, kwargs in (
+            ("/api/ojj/oj/practice/operation/topo_scene", {"params": {"resource_id": resource_id}}),
+            (f"/api/ad/practice/web/questions/{resource_id}/scene/", {}),
+        ):
+            try:
+                resp = self._request("GET", path, want_json=True, **kwargs)
+                if resp.status_code in (404, 405):
+                    errors.append(f"{path}: HTTP {resp.status_code}")
+                    continue
+                resp.raise_for_status()
+                data = self._unwrap(resp).get("data") or {}
+                scene_data = data.get("scene_data") if isinstance(data, dict) and "scene_data" in data else data
+                return {"kind": "practice", "resource_id": resource_id, "scene_data": scene_data, "addresses": self._collect_scene_addresses(scene_data)}
+            except Exception as exc:
+                errors.append(f"{path}: {exc}")
+        raise AdWorldError("AdWorld practice scene query failed: " + "; ".join(errors))
+
+    def close_operation_scene(self, resource_id: str) -> Dict[str, Any]:
+        """Close/delete an AdWorld practice operation scene."""
+        errors: List[str] = []
+        for method, path, kwargs in (
+            ("DELETE", "/api/ojj/oj/practice/operation/scene", {"json": {"resource_id": resource_id}}),
+            ("DELETE", f"/api/ad/practice/web/questions/{resource_id}/scene/", {}),
+            ("POST", "/api/ojj/oj/practice/operation/scene_update_status", {"json": {"resource_id": resource_id, "status": 3}}),
+        ):
+            try:
+                resp = self._request(method, path, want_json=True, **kwargs)
+                if resp.status_code in (404, 405):
+                    errors.append(f"{method} {path}: HTTP {resp.status_code}")
+                    continue
+                resp.raise_for_status()
+                data = self._unwrap(resp).get("data") or {}
+                return {"kind": "practice", "resource_id": resource_id, "closed": True, "close_result": data, "addresses": []}
+            except Exception as exc:
+                errors.append(f"{method} {path}: {exc}")
+        raise AdWorldError("AdWorld practice scene close failed: " + "; ".join(errors))
+
+    def contest_start_target(self, contest_id: Optional[str], challenge_id: str) -> Dict[str, Any]:
+        if contest_id:
+            target = self.resolve_play_target(contest_id)
+            if target.get("kind") == "race":
+                self._ensure_entered_target(target)
+                opened = self.open_race_scene(target["id"], challenge_id)
+                return {"contest_id": contest_id, "challenge_id": challenge_id, **opened}
+        opened = self.open_operation_scene(challenge_id)
+        try:
+            scene = self.get_operation_scene(challenge_id)
+            if scene.get("addresses"):
+                opened["addresses"] = scene["addresses"]
+            opened["scene_query"] = scene
+        except Exception as exc:
+            opened["scene_query_error"] = str(exc)
+        return opened
+
+    def contest_close_target(self, contest_id: Optional[str], challenge_id: str) -> Dict[str, Any]:
+        if contest_id:
+            target = self.resolve_play_target(contest_id)
+            if target.get("kind") == "race":
+                self._ensure_entered_target(target)
+                closed = self.close_race_scene(target["id"], challenge_id)
+                return {"contest_id": contest_id, "challenge_id": challenge_id, **closed}
+        closed = self.close_operation_scene(challenge_id)
+        return {"contest_id": contest_id, "challenge_id": challenge_id, **closed}
 
     def contest_submit_flag(self, contest_id: Optional[str], challenge_id: str, flag: str) -> Dict[str, Any]:
         if contest_id:
             target = self.resolve_play_target(contest_id)
             if target["kind"] == "race":
+                self._ensure_entered_target(target)
                 return self.submit_race_flag(target["id"], challenge_id, flag)
         return self.submit_flag(challenge_id, flag)
 
@@ -672,6 +1200,7 @@ class AdWorldClient:
         target = self.resolve_play_target(contest_id)
         if target["kind"] != "race":
             raise AdWorldError("Practice set has no race scoreboard")
+        self._ensure_entered_target(target)
         return self.race_summary_checkpoints(target["id"])
 
 

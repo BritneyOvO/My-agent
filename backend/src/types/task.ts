@@ -38,6 +38,10 @@ export type TaskComment = {
   text: string;
 };
 
+export type TaskRetryRequest = {
+  prompt: string;
+};
+
 export const taskRequestSchema = {
   parse(input: unknown): TaskRequest {
     const body = requireObject(input);
@@ -75,6 +79,13 @@ export const taskCommentSchema = {
   parse(input: unknown): TaskComment {
     const body = requireObject(input);
     return { text: readString(body.text, "text", 1, 4000) };
+  }
+};
+
+export const taskRetrySchema = {
+  parse(input: unknown): TaskRetryRequest {
+    const body = requireObject(input);
+    return { prompt: readString(body.prompt, "prompt", 1, 12000) };
   }
 };
 

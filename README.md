@@ -6,6 +6,7 @@
 
 - `backend/`：协作 Hub/API，用于任务交接、审计、策略检查、范围校验、工具调度和多 Agent 协作。
 - `backend/match_backend/`：CTF 比赛平台统一后端，提供 CTFd、GZCTF、NSSCTF、攻防世界、CTFPlus 等平台的统一 Python API/CLI。
+- `frontend/`：Solid.js Web UI，统一接入 Agent Hub API 和 CTF 平台 Match Backend API。
 - `product/`：最终独立安全/CTF Agent 产品原型。该产品本体应与 Hub 运行时解耦，不依赖 Hub 作为核心架构。
 
 ## 目录结构
@@ -21,6 +22,7 @@
 │   │   └── types/        # 请求 schema 和类型定义
 │   ├── match_backend/    # CTF 比赛平台统一 Python 后端
 │   └── package.json
+├── frontend/             # Solid.js Web UI 控制台
 ├── product/              # 独立 Agent 产品原型
 │   └── src/
 │       ├── core/         # 规划引擎
@@ -55,7 +57,64 @@ npm run dev         # 构建并以 watch 模式运行 backend
 npm run start       # 构建并运行 backend
 npm run match:test   # 运行 CTF 平台统一后端 Python 测试
 npm run match:api    # 启动 CTF 平台统一后端 API
+npm run frontend:dev # 启动 Solid.js 前端开发服务器
+npm run frontend:build # 构建前端静态资源
 ```
+
+## Web UI
+
+前端位于 `frontend/`，使用 Solid.js + Vite。
+
+启动开发服务器：
+
+```bash
+npm run frontend:dev
+```
+
+默认访问：
+
+```text
+http://127.0.0.1:5173
+```
+
+前端默认通过 Vite proxy 访问后端：
+
+| 前端路径 | 代理目标 | 用途 |
+| --- | --- | --- |
+| `/hub-api` | `http://127.0.0.1:8080` | Agent Hub API |
+| `/match-api` | `http://127.0.0.1:8000` | CTF Match Backend API |
+
+可通过环境变量覆盖：
+
+```bash
+VITE_HUB_API_BASE=/hub-api
+VITE_MATCH_API_BASE=/match-api
+VITE_HUB_PROXY_TARGET=http://127.0.0.1:8080
+VITE_MATCH_PROXY_TARGET=http://127.0.0.1:8000
+```
+
+前端已接入的 Agent Hub 能力：
+
+- `/health`
+- `/hub/info`
+- `/hub/messages/handoff`
+- `/hub/messages`
+- `/tasks`
+- `/tasks/:taskId/status`
+- `/tools`
+- `/tools/run`
+
+前端已接入的 CTF 平台能力：
+
+- `/api/platforms`
+- `/api/sessions`
+- `/api/sessions/{session_id}/me`
+- `/api/sessions/{session_id}/contests`
+- `/api/sessions/{session_id}/challenges`
+- `/api/sessions/{session_id}/challenges/{challenge_id}`
+- `/api/sessions/{session_id}/challenges/{challenge_id}/download`
+- `/api/sessions/{session_id}/challenges/{challenge_id}/submit`
+- `/api/sessions/{session_id}/scoreboard`
 
 ## Backend API
 
@@ -155,8 +214,7 @@ curl -s http://127.0.0.1:8000/api/platforms
 配置文件位于 `config/`：
 
 - `agent-policy.yaml`：允许的模式和阻断关键词
-- `allowed-scopes.yaml`：允许访问的目标和范围
-- `tool-registry.yaml`：工具白名单、风险等级、超时时间和默认命令
+- `tool-registry.yaml`：工具白名单、风险等级、是否需要 Target、超时时间和默认命令
 
 Match Backend 环境变量：
 
@@ -169,7 +227,7 @@ Match Backend 环境变量：
 ## 安全设计说明
 
 - 工具执行必须经过 `ToolDispatcher`，项目不提供通用裸 shell 执行接口。
-- 网络类工具需要经过 Scope 校验。
+- 网络类工具需要显式提供 Target，不再限制域名后缀或目标作用域。
 - Task/Report 文件读取会先校验 `taskId` 必须为 UUID，避免路径穿越。
 - 运行时数据、日志、pycache、构建产物、`node_modules` 和 `.external/` 不应进入 Git。
 - `backend/match_backend/.runtime/`、`.sessions/`、`downloads/`、`work/`、`.pytest_cache/` 不应进入 Git。
@@ -184,6 +242,7 @@ npm run typecheck
 npm run build
 npm run smoke
 npm run match:test
+npm run frontend:build
 ```
 
 正常 smoke 输出类似：

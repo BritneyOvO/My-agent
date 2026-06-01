@@ -399,6 +399,93 @@ class GZCTFClient:
         r.raise_for_status()
         return self._json(r)
 
+    def open_challenge_container(self, game_id: int, challenge_id: int) -> Dict[str, Any]:
+        r = self._request("POST", f"/api/game/{game_id}/container/{challenge_id}", headers={"Content-Type": "application/json"})
+        data: Any = {}
+        try:
+            data = self._json(r) if r.text.strip() and "json" in r.headers.get("content-type", "") else (r.text.strip() or {})
+        except Exception:
+            data = r.text.strip()
+
+        detail: Dict[str, Any] = {}
+        try:
+            detail = self.get_challenge(game_id, challenge_id)
+        except Exception as exc:
+            detail = {"error": str(exc)}
+        addresses = self._collect_container_addresses(data, detail)
+
+        # GZCTF returns 400 when a container already exists.  In that case the
+        # challenge detail carries context.instanceEntry, so treat it as success.
+        if r.status_code >= 400:
+            text = json.dumps(data, ensure_ascii=False) if isinstance(data, (dict, list)) else str(data)
+            if addresses and ("已经创建容器" in text or "already" in text.lower() or "running" in text.lower()):
+                return {
+                    "game_id": game_id,
+                    "challenge_id": challenge_id,
+                    "already_running": True,
+                    "start_result": data,
+                    "detail": detail,
+                    "addresses": addresses,
+                }
+            r.raise_for_status()
+
+        return {"game_id": game_id, "challenge_id": challenge_id, "start_result": data, "detail": detail, "addresses": addresses}
+
+    def close_challenge_container(self, game_id: int, challenge_id: int) -> Dict[str, Any]:
+        r = self._request("DELETE", f"/api/game/{game_id}/container/{challenge_id}", headers={"Content-Type": "application/json"})
+        r.raise_for_status()
+        data = self._json(r) if r.text.strip() and "json" in r.headers.get("content-type", "") else (r.text.strip() or {})
+        detail: Dict[str, Any] = {}
+        try:
+            detail = self.get_challenge(game_id, challenge_id)
+        except Exception as exc:
+            detail = {"error": str(exc)}
+        return {"game_id": game_id, "challenge_id": challenge_id, "closed": True, "close_result": data, "detail": detail, "addresses": self._collect_container_addresses(data, detail)}
+
+    @staticmethod
+    def _collect_container_addresses(*payloads: Any) -> List[str]:
+        out: List[str] = []
+        seen = set()
+
+        def add(value: Any) -> None:
+            if not isinstance(value, str):
+                return
+            text = value.strip()
+            if not text or text in seen:
+                return
+            # Attachment URLs also appear in DynamicContainer.context.url; keep
+            # them out of target addresses.
+            if re.search(r"\.(zip|7z|rar|tar|gz|xz|bz2|txt|pdf|png|jpg|jpeg|gif|pcap|pcapng|bin|elf|exe|apk|jar|py|c|cpp|go|rs)(?:[?#].*)?$", text, re.I):
+                return
+            if re.match(r"^(https?://|[A-Za-z0-9_.-]+:\d+|nc\s+|ncat\s+|ssh\s+|socat\s+)", text, re.I):
+                seen.add(text)
+                out.append(text)
+
+        def walk(obj: Any) -> None:
+            if isinstance(obj, dict):
+                for key in ("entry", "instanceEntry", "url", "target", "targetUrl", "address", "endpoint"):
+                    add(obj.get(key))
+                context = obj.get("context")
+                if isinstance(context, dict):
+                    add(context.get("instanceEntry"))
+                    # context.url is usually an attachment URL, not target; do not add it here.
+                host = obj.get("host") or obj.get("hostname") or obj.get("ip") or obj.get("address")
+                port = obj.get("port") or obj.get("publicPort") or obj.get("public_port")
+                if host and port:
+                    add(f"{host}:{port}")
+                for value in obj.values():
+                    if isinstance(value, (dict, list)):
+                        walk(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    walk(value)
+            elif isinstance(obj, str):
+                add(obj)
+
+        for payload in payloads:
+            walk(payload)
+        return out
+
     def download_challenge_attachments(self, game_id: int, challenge_id: int, outdir: str) -> List[DownloadedFile]:
         data = self.get_challenge(game_id, challenge_id)
         attachments = []

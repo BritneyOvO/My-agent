@@ -68,7 +68,7 @@ class CTFPlusPlatform(CTFPlatformClient):
     def current_user(self) -> dict[str, Any]:
         return to_plain(self.main.get_me())
 
-    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None) -> Any:
+    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None, public: bool | None = None) -> Any:
         data = self.main.list_joined_competitions(page=page, size=page_size)
         if search:
             needle = search.lower()

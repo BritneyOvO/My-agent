@@ -144,6 +144,12 @@ class FakeGZCTFClient:
     def submit_flag(self, game_id, challenge_id, flag):
         return {"accepted": True, "game_id": game_id, "challenge_id": challenge_id, "flag": flag}
 
+    def open_challenge_container(self, game_id, challenge_id):
+        return {"game_id": game_id, "challenge_id": challenge_id, "start_result": {"status": "Running", "entry": "target.local:31337"}, "addresses": ["target.local:31337"]}
+
+    def close_challenge_container(self, game_id, challenge_id):
+        return {"game_id": game_id, "challenge_id": challenge_id, "closed": True, "addresses": []}
+
 
 class FakeNSSCTFClient:
     def __init__(self, base_url, timeout=20, verify=True, debug=False):
@@ -172,7 +178,8 @@ class FakeNSSCTFClient:
         return {"name": "nss-user"}
 
     def list_contests(self, page=1, filters=None):
-        return {"contests": [{"id": 815, "name": "NSS"}], "page": page, "filters": filters}
+        suffix = "private" if isinstance(filters, dict) and filters.get("type") == 1 else "public"
+        return {"contests": [{"id": 815 if suffix == "public" else 816, "name": f"NSS-{suffix}"}], "page": page, "filters": filters}
 
     def contest_info(self, contest_id):
         return {"id": contest_id, "title": "contest"}
@@ -259,7 +266,7 @@ class FakeAdWorldClient:
     def contest_entry(self, contest_id):
         if contest_id == "ACTF":
             raise Exception("keyword lookup disabled")
-        return {"query": contest_id, "kind": "race", "target_id": contest_id}
+        return {"query": contest_id, "kind": "race", "target_id": contest_id, "race_url": f"/flag/{contest_id}/GuidePage"}
 
     def enter_contest(self, contest_id):
         return {"entered": True, "contest_id": contest_id}
@@ -278,6 +285,12 @@ class FakeAdWorldClient:
 
     def contest_submit_flag(self, contest_id, challenge_id, flag):
         return {"accepted": True, "contest_id": contest_id, "challenge_id": challenge_id, "flag": flag}
+
+    def contest_start_target(self, contest_id, challenge_id):
+        return {"kind": "practice", "contest_id": contest_id, "challenge_id": challenge_id, "addresses": ["http://target.local:8080"]}
+
+    def contest_close_target(self, contest_id, challenge_id):
+        return {"kind": "practice", "contest_id": contest_id, "challenge_id": challenge_id, "closed": True}
 
     def contest_scoreboard(self, contest_id):
         return [{"team": "ad", "score": 1}]
@@ -389,6 +402,8 @@ class UnifiedOperationTests(unittest.TestCase):
             self.assertEqual(client.get_challenge(100, contest_id=1)["id"], 100)
             self.assertTrue(Path(client.download_attachment(100, str(Path(td) / "dl"), contest_id=1)[0]["path"]).exists())
             self.assertTrue(client.submit_flag(100, "flag{x}", contest_id=1)["accepted"])
+            self.assertEqual(client.start_target(100, contest_id=1)["addresses"][0], "target.local:31337")
+            self.assertTrue(client.close_target(100, contest_id=1)["closed"])
 
             token_client = GZCTFPlatform(PlatformConfig(base_url="http://gz.local", session_file=str(Path(td) / "gz2.json")))
             self.assertTrue(token_client.login(Credentials(token="tok"))["login"]["success"])
@@ -415,6 +430,15 @@ class UnifiedOperationTests(unittest.TestCase):
             token_client = NSSCTFPlatform(PlatformConfig(session_file=session))
             self.assertTrue(token_client.login(Credentials(token="tok"))["session_cache"]["token_saved"])
 
+    def test_nssctf_contest_type_filters(self):
+        import ctf_platforms.vendor.nssctf_client as vendor
+        with tempfile.TemporaryDirectory() as td, patch.object(vendor, "NSSCTFClient", FakeNSSCTFClient):
+            client = NSSCTFPlatform(PlatformConfig(session_file=str(Path(td) / "nss.json")))
+            public = client.list_contests(public=True)
+            private = client.list_contests(public=False)
+            self.assertEqual(public["filters"], {"name": "", "type": 0, "kind": 0, "source": 0})
+            self.assertEqual(private["filters"], {"name": "", "type": 1, "kind": 0, "source": 0})
+
     def test_adworld_operations(self):
         import ctf_platforms.vendor.adworld_client as vendor
         with tempfile.TemporaryDirectory() as td, patch.object(vendor, "AdWorldClient", FakeAdWorldClient):
@@ -426,6 +450,7 @@ class UnifiedOperationTests(unittest.TestCase):
             self.assertEqual(listed["contest_id"], "event1")
             self.assertEqual(listed["usage"]["--contest-id"], "event1")
             self.assertEqual(listed["entry"]["target_id"], "event1")
+            self.assertTrue(listed["play_url"].endswith("/flag/event1/GuidePage"))
             self.assertEqual(client.get_contest("event1")["id"], "event1")
             with self.assertRaises(Exception):
                 client.get_contest("ACTF")
@@ -434,6 +459,8 @@ class UnifiedOperationTests(unittest.TestCase):
             self.assertEqual(client.get_challenge("c1", contest_id="event1")["id"], "c1")
             self.assertTrue(Path(client.download_attachment("c1", str(Path(td) / "dl"), contest_id="event1")[0]["path"]).exists())
             self.assertTrue(client.submit_flag("c1", "flag{x}", contest_id="event1")["accepted"])
+            self.assertEqual(client.start_target("c1", contest_id="event1")["addresses"][0], "http://target.local:8080")
+            self.assertTrue(client.close_target("c1", contest_id="event1")["closed"])
             self.assertEqual(client.scoreboard("event1")[0]["score"], 1)
             self.assertTrue(AdWorldPlatform(PlatformConfig(session_file=str(Path(td) / "ad2.json"))).login(Credentials(token="tok"))["session_cache"]["saved"])
 

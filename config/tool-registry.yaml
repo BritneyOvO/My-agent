@@ -2,50 +2,120 @@ tools:
   file:
     command: ["file"]
     risk: low
-    requires_scope: false
+    requires_target: false
     timeout: 20
   strings:
     command: ["strings"]
     risk: low
-    requires_scope: false
+    requires_target: false
     timeout: 20
   readelf:
     command: ["readelf", "-a"]
     risk: low
-    requires_scope: false
+    requires_target: false
     timeout: 20
   objdump:
     command: ["objdump", "-d"]
     risk: low
-    requires_scope: false
+    requires_target: false
     timeout: 30
   exiftool:
     command: ["exiftool"]
     risk: low
-    requires_scope: false
+    requires_target: false
     timeout: 20
   binwalk:
     command: ["binwalk"]
     risk: low
-    requires_scope: false
+    requires_target: false
     timeout: 60
+  unzip_list:
+    command: ["unzip", "-l"]
+    risk: low
+    requires_target: false
+    timeout: 30
+  unzip:
+    command: ["unzip", "-o"]
+    risk: medium
+    requires_target: false
+    timeout: 120
+  7z_list:
+    command: ["7z", "l"]
+    risk: low
+    requires_target: false
+    timeout: 60
+  7z_extract:
+    command: ["7z", "x", "-y"]
+    risk: medium
+    requires_target: false
+    timeout: 180
+  rar_list:
+    command: ["unrar", "l"]
+    risk: low
+    requires_target: false
+    timeout: 60
+  rar_extract:
+    command: ["unrar", "x", "-o+"]
+    risk: medium
+    requires_target: false
+    timeout: 180
+  tar_list:
+    command: ["tar", "-tf"]
+    risk: low
+    requires_target: false
+    timeout: 30
+  tar_extract:
+    command: ["tar", "-xf"]
+    risk: medium
+    requires_target: false
+    timeout: 120
+  gzip_decompress:
+    command: ["gzip", "-dkf"]
+    risk: medium
+    requires_target: false
+    timeout: 60
+  bzip2_decompress:
+    command: ["bzip2", "-dkf"]
+    risk: medium
+    requires_target: false
+    timeout: 60
+  xz_decompress:
+    command: ["xz", "-dkf"]
+    risk: medium
+    requires_target: false
+    timeout: 60
+  r2:
+    command: ["bash", "/home/ctf/My-agent/backend/scripts/r2_tool.sh"]
+    risk: medium
+    requires_target: false
+    timeout: 120
   tshark_summary:
     command: ["tshark", "-r"]
     risk: low
-    requires_scope: false
+    requires_target: false
     timeout: 60
-  whatweb_safe:
+  python:
+    command: ["python3"]
+    risk: medium
+    requires_target: false
+    timeout: 60
+  curl:
+    command: ["curl", "-i", "-L", "-sS", "--max-time", "30", "--connect-timeout", "8"]
+    risk: medium
+    requires_target: true
+    timeout: 40
+  whatweb:
     command: ["whatweb", "--no-errors"]
     risk: medium
-    requires_scope: true
+    requires_target: true
     timeout: 60
-  nmap_safe:
+  nmap:
     command: ["nmap", "-sV", "--top-ports", "100"]
     risk: medium
-    requires_scope: true
+    requires_target: true
     timeout: 120
-  ffuf_safe:
+  ffuf:
     command: ["ffuf"]
     risk: medium
-    requires_scope: true
+    requires_target: true
     timeout: 120

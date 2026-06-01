@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,20 @@ import requests
 DEFAULT_TIMEOUT = 20
 UA = "ctf-platform-manager-nssctf/0.1"
 SESSION_DIR = Path(".sessions")
+
+NSS_TYPE_NAMES: Dict[str, str] = {
+    "1": "WEB",
+    "2": "PWN",
+    "3": "REVERSE",
+    "4": "CRYPTO",
+    "5": "MISC",
+    "6": "MOBILE",
+    "7": "ETH",
+    "8": "IOT",
+    "9": "AI",
+    "10": "实战",
+    "11": "靶场",
+}
 
 
 class NSSCTFError(RuntimeError):
@@ -91,6 +106,7 @@ class NSSCTFClient:
     def explain_code(code: Any) -> str:
         mapping = {
             200: "成功",
+            202: "比赛已结束，附件不可下载",
             204: "提交未通过，通常表示 flag 错误、题目未开放，或当前状态不允许提交",
             301: "需要进一步认证/权限不足",
             402: "需要登录",
@@ -227,6 +243,95 @@ class NSSCTFClient:
             raise NSSCTFError(f"Unexpected open response from {resp.url}: {data!r}")
         return data
 
+    def open_problem_target(self, problem_id: int, type_id: int = 0) -> Dict[str, Any]:
+        """Open a problem-bank dynamic target/container."""
+        return self.open_problem_attachment(problem_id, type_id=type_id)
+
+    def open_contest_target(self, contest_id: int, problem_id: int, type_id: int = 0) -> Dict[str, Any]:
+        """Open a contest dynamic target/container.
+
+        NSSCTF forks differ slightly. Try the contest-scoped endpoints first,
+        then fall back to the global problem docker endpoint.
+        """
+        paths = [
+            f"/api/contest/{contest_id}/problem/{problem_id}/docker/open/",
+            f"/api/contest/problem/{contest_id}/{problem_id}/docker/open/",
+            f"/api/contest/{contest_id}/docker/{problem_id}/open/",
+        ]
+        last_error: Exception | None = None
+        for path in paths:
+            try:
+                resp = self._request("POST", path, json={"type": type_id})
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                data = self._json(resp)
+                if not isinstance(data, dict):
+                    raise NSSCTFError(f"Unexpected open response from {resp.url}: {data!r}")
+                return data
+            except Exception as exc:
+                last_error = exc
+                self.log("contest target open failed", path, exc)
+        try:
+            return self.open_problem_target(problem_id, type_id=type_id)
+        except Exception as exc:
+            last_error = exc
+        raise NSSCTFError(f"Contest target open failed: {last_error}")
+
+    def close_problem_target(self, problem_id: int, type_id: int = 0) -> Dict[str, Any]:
+        """Close a problem-bank dynamic target/container."""
+        paths = [
+            ("POST", f"/api/problem/docker/{problem_id}/close/", {"json": {"type": type_id}}),
+            ("DELETE", f"/api/problem/docker/{problem_id}/close/", {"json": {"type": type_id}}),
+            ("POST", f"/api/problem/docker/{problem_id}/destroy/", {"json": {"type": type_id}}),
+            ("DELETE", f"/api/problem/docker/{problem_id}/", {"json": {"type": type_id}}),
+        ]
+        last_error: Exception | None = None
+        for method, path, kwargs in paths:
+            try:
+                resp = self._request(method, path, **kwargs)
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                data = self._json(resp)
+                if not isinstance(data, dict):
+                    raise NSSCTFError(f"Unexpected close response from {resp.url}: {data!r}")
+                return data
+            except Exception as exc:
+                last_error = exc
+                self.log("problem target close failed", method, path, exc)
+        raise NSSCTFError(f"Problem target close failed: {last_error}")
+
+    def close_contest_target(self, contest_id: int, problem_id: int, type_id: int = 0) -> Dict[str, Any]:
+        """Close a contest dynamic target/container."""
+        paths = [
+            ("POST", f"/api/contest/{contest_id}/problem/{problem_id}/docker/close/", {"json": {"type": type_id}}),
+            ("DELETE", f"/api/contest/{contest_id}/problem/{problem_id}/docker/close/", {"json": {"type": type_id}}),
+            ("POST", f"/api/contest/problem/{contest_id}/{problem_id}/docker/close/", {"json": {"type": type_id}}),
+            ("DELETE", f"/api/contest/problem/{contest_id}/{problem_id}/docker/close/", {"json": {"type": type_id}}),
+            ("POST", f"/api/contest/{contest_id}/docker/{problem_id}/close/", {"json": {"type": type_id}}),
+            ("DELETE", f"/api/contest/{contest_id}/docker/{problem_id}/close/", {"json": {"type": type_id}}),
+        ]
+        last_error: Exception | None = None
+        for method, path, kwargs in paths:
+            try:
+                resp = self._request(method, path, **kwargs)
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                data = self._json(resp)
+                if not isinstance(data, dict):
+                    raise NSSCTFError(f"Unexpected close response from {resp.url}: {data!r}")
+                return data
+            except Exception as exc:
+                last_error = exc
+                self.log("contest target close failed", method, path, exc)
+        try:
+            return self.close_problem_target(problem_id, type_id=type_id)
+        except Exception as exc:
+            last_error = exc
+        raise NSSCTFError(f"Contest target close failed: {last_error}")
+
     @staticmethod
     def _filename_from_url(url: str) -> Optional[str]:
         parsed = urlparse(url)
@@ -237,14 +342,56 @@ class NSSCTFClient:
                     return unquote(value.split("filename=", 1)[1].strip().strip('"'))
         return None
 
-    def _resolve_problem_annex_download(self, problem_id: int) -> requests.Response:
-        # 尝试补齐前置 open 步骤；失败时不立刻终止，继续探测 annex 接口返回。
-        try:
-            open_data = self.open_problem_attachment(problem_id)
-            self.log("problem open", problem_id, "->", open_data)
-        except Exception as exc:
-            self.log("problem open failed", problem_id, exc)
+    def _download_external_url(self, external_url: str) -> requests.Response:
+        real = self._request("GET", external_url, stream=True)
+        real.raise_for_status()
+        return real
 
+    def _resolve_json_annex_response(self, resp: requests.Response) -> Optional[requests.Response]:
+        ctype = resp.headers.get("content-type", "")
+        if "json" not in ctype:
+            return resp
+        data = self._json(resp)
+        if not isinstance(data, dict):
+            raise NSSCTFError(f"Unexpected annex response shape from {resp.url}: {data!r}")
+        code = data.get("code")
+        external_url = data.get("data")
+        if code == 200 and isinstance(external_url, str) and external_url.startswith(("http://", "https://")):
+            return self._download_external_url(external_url)
+        if code == 200:
+            raise NSSCTFError(f"Annex response missing downloadable URL: {data}")
+        if code == 202:
+            raise NSSCTFError(f"Annex unavailable: contest ended code=202: {data}")
+        # code=203/data=null can appear before the required open/preflight fully
+        # unlocks the attachment. Return None so callers can retry after open.
+        if code == 203:
+            return None
+        raise NSSCTFError(f"Annex unavailable code={code}: {data}")
+
+    def _resolve_problem_annex_download(self, problem_id: int) -> requests.Response:
+        last_data: Any = None
+        for attempt in range(6):
+            # 尝试补齐前置 open 步骤；失败时不立刻终止，继续探测 annex 接口返回。
+            try:
+                open_data = self.open_problem_attachment(problem_id)
+                self.log("problem open", problem_id, "attempt", attempt + 1, "->", open_data)
+                last_data = open_data
+            except Exception as exc:
+                self.log("problem open failed", problem_id, "attempt", attempt + 1, exc)
+
+            resp = self.problem_annex(problem_id)
+            resolved = self._resolve_json_annex_response(resp)
+            if resolved is not None:
+                return resolved
+            try:
+                last_data = self._json(resp)
+            except Exception:
+                pass
+            time.sleep(0.6 + attempt * 0.25)
+
+        raise NSSCTFError(f"Problem annex unavailable after retry: {last_data}")
+
+    def _resolve_problem_annex_download_legacy(self, problem_id: int) -> requests.Response:
         resp = self.problem_annex(problem_id)
         ctype = resp.headers.get("content-type", "")
         if "json" not in ctype:
@@ -307,6 +454,41 @@ class NSSCTFClient:
         resp.raise_for_status()
         return self._unwrap(resp).get("data") or {}
 
+    def _contest_category_names(self, cats: Dict[str, Any]) -> Dict[str, str]:
+        """Build per-contest category id -> display name mapping.
+
+        /problem/category/ returns the type ids enabled for the current contest.
+        The list is contest-specific, so callers must not treat a problem's
+        contest_category as a fixed 0-based position.  Prefer names supplied by
+        the response, then fall back to NSSCTF's global 1-based type ids.
+        """
+        mapping: Dict[str, str] = {}
+
+        def add(key: Any, value: Any) -> None:
+            if key is None or value is None:
+                return
+            name = str(value).strip()
+            if name:
+                mapping[str(key)] = name
+
+        for field in ("category", "categories", "items"):
+            values = cats.get(field)
+            if isinstance(values, list):
+                for entry in values:
+                    if isinstance(entry, dict):
+                        add(entry.get("id") or entry.get("type") or entry.get("value") or entry.get("key"), entry.get("name") or entry.get("title") or entry.get("label"))
+
+        types = cats.get("type") or cats.get("types") or []
+        names = cats.get("name") or cats.get("names") or cats.get("label") or cats.get("labels") or []
+        if not isinstance(names, list):
+            names = []
+        if isinstance(types, list):
+            for index, typ in enumerate(types):
+                explicit = names[index] if index < len(names) else None
+                add(typ, explicit or NSS_TYPE_NAMES.get(str(typ)) or (typ if isinstance(typ, str) and not typ.isdigit() else None))
+
+        return mapping
+
     def contest_problem_list(self, contest_id: int) -> Dict[str, Any]:
         """Return all visible contest problems grouped and flattened.
 
@@ -317,18 +499,26 @@ class NSSCTFClient:
         """
         cats = self.contest_problem_categories(contest_id)
         types = cats.get("type") or []
+        category_names = self._contest_category_names(cats)
         grouped: Dict[str, Any] = {}
         problems: List[Dict[str, Any]] = []
         for typ in types:
+            type_key = str(typ)
             resp = self._request("GET", f"/api/contest/{contest_id}/problem/{typ}/")
             resp.raise_for_status()
             data = self._unwrap(resp).get("data") or []
-            grouped[str(typ)] = data
+            grouped[type_key] = data
             if isinstance(data, list):
                 for item in data:
                     if isinstance(item, dict):
-                        problems.append({**item, "contest_category": typ})
-        return {"contest_id": contest_id, "categories": cats, "grouped": grouped, "problems": problems, "total": len(problems)}
+                        category_name = category_names.get(type_key) or NSS_TYPE_NAMES.get(type_key)
+                        problems.append({
+                            **item,
+                            "contest_category": category_name or typ,
+                            "contest_category_id": typ,
+                            "category": category_name or item.get("category"),
+                        })
+        return {"contest_id": contest_id, "categories": cats, "category_names": category_names, "grouped": grouped, "problems": problems, "total": len(problems)}
 
     def contest_rank(self, contest_id: int, page: int = 1) -> Dict[str, Any]:
         resp = self._request("GET", f"/api/contest/{contest_id}/rank/{page}/")
@@ -346,8 +536,33 @@ class NSSCTFClient:
         resp.raise_for_status()
         return resp
 
+    def _resolve_contest_annex_download(self, contest_id: int, problem_id: int) -> requests.Response:
+        last_data: Any = None
+        for attempt in range(6):
+            # Some NSSCTF contest annex endpoints need the challenge detail to be
+            # touched before the backend prepares the attachment URL. code=202 is
+            # handled as a hard "contest ended" error in _resolve_json_annex_response.
+            try:
+                detail = self.challenge_detail(contest_id, problem_id)
+                self.log("contest challenge detail", contest_id, problem_id, "attempt", attempt + 1, "->", detail)
+                last_data = detail
+            except Exception as exc:
+                self.log("contest challenge detail failed", contest_id, problem_id, "attempt", attempt + 1, exc)
+
+            resp = self.challenge_annex(contest_id, problem_id)
+            resolved = self._resolve_json_annex_response(resp)
+            if resolved is not None:
+                return resolved
+            try:
+                last_data = self._json(resp)
+            except Exception:
+                pass
+            time.sleep(0.6 + attempt * 0.25)
+
+        raise NSSCTFError(f"Contest annex unavailable after retry: {last_data}")
+
     def download_annex(self, contest_id: int, problem_id: int, outdir: str, filename: Optional[str] = None) -> List[DownloadedFile]:
-        resp = self.challenge_annex(contest_id, problem_id)
+        resp = self._resolve_contest_annex_download(contest_id, problem_id)
         out = Path(outdir)
         out.mkdir(parents=True, exist_ok=True)
         ctype = resp.headers.get("content-type", "")

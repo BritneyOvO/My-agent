@@ -167,8 +167,8 @@ def me(session_id: str) -> Any:
 
 
 @app.get("/api/sessions/{session_id}/contests")
-def contests(session_id: str, page: int = 1, page_size: int = 50, search: str | None = None) -> Any:
-    return to_plain(client_from_meta(session_id).list_contests(page=page, page_size=page_size, search=search))
+def contests(session_id: str, page: int = 1, page_size: int = 50, search: str | None = None, public: bool | None = None) -> Any:
+    return to_plain(client_from_meta(session_id).list_contests(page=page, page_size=page_size, search=search, public=public))
 
 
 @app.get("/api/sessions/{session_id}/contests/{contest_id}")
@@ -190,18 +190,56 @@ def challenges(
     page_size: int = 50,
     search: str | None = None,
 ) -> Any:
-    return to_plain(client_from_meta(session_id).list_challenges(contest_id=contest_id, page=page, page_size=page_size, search=search))
+    try:
+        return to_plain(client_from_meta(session_id).list_challenges(contest_id=contest_id, page=page, page_size=page_size, search=search))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{exc.__class__.__name__}: {exc}") from exc
 
 
 @app.get("/api/sessions/{session_id}/challenges/{challenge_id}")
 def challenge(session_id: str, challenge_id: str, contest_id: str | None = None) -> Any:
-    return to_plain(client_from_meta(session_id).get_challenge(challenge_id, contest_id=contest_id))
+    try:
+        return to_plain(client_from_meta(session_id).get_challenge(challenge_id, contest_id=contest_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{exc.__class__.__name__}: {exc}") from exc
 
 
 @app.post("/api/sessions/{session_id}/challenges/{challenge_id}/download")
 def download(session_id: str, challenge_id: str, contest_id: str | None = None) -> Any:
     outdir = DOWNLOAD_DIR / session_id / str(challenge_id)
     return to_plain(client_from_meta(session_id).download_attachment(challenge_id, str(outdir), contest_id=contest_id))
+
+
+@app.post("/api/sessions/{session_id}/challenges/{challenge_id}/target")
+def start_target(session_id: str, challenge_id: str, contest_id: str | None = None) -> Any:
+    try:
+        return to_plain(client_from_meta(session_id).start_target(challenge_id, contest_id=contest_id))
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        raise HTTPException(status_code=400, detail=f"{exc.__class__.__name__}: {exc}") from exc
+
+
+@app.delete("/api/sessions/{session_id}/challenges/{challenge_id}/target")
+def close_target(session_id: str, challenge_id: str, contest_id: str | None = None) -> Any:
+    try:
+        return to_plain(client_from_meta(session_id).close_target(challenge_id, contest_id=contest_id))
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        raise HTTPException(status_code=400, detail=f"{exc.__class__.__name__}: {exc}") from exc
 
 
 @app.post("/api/sessions/{session_id}/challenges/{challenge_id}/submit")

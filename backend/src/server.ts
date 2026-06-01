@@ -22,7 +22,10 @@ export class ReplyContext {
   statusCode = 200;
   headers: Record<string, string> = {};
   sent = false;
+  streamed = false;
   body: unknown;
+
+  constructor(private readonly response?: ServerResponse) {}
 
   status(code: number) {
     this.statusCode = code;
@@ -43,6 +46,18 @@ export class ReplyContext {
     this.sent = true;
     this.body = body;
     return body;
+  }
+
+  stream(statusCode: number, headers: Record<string, string>) {
+    if (!this.response) {
+      throw new Error("stream response is not available");
+    }
+    this.statusCode = statusCode;
+    this.headers = { ...this.headers, ...headers };
+    this.sent = true;
+    this.streamed = true;
+    this.response.writeHead(statusCode, this.headers);
+    return this.response;
   }
 }
 
@@ -123,7 +138,7 @@ export class AppInstance {
       return;
     }
 
-    const reply = new ReplyContext();
+    const reply = new ReplyContext(outgoing);
     reply.header("X-Request-ID", requestId);
 
     const request: RequestContext = {
@@ -137,6 +152,9 @@ export class AppInstance {
 
     try {
       const returned = await match.route.handler(request, reply);
+      if (reply.streamed) {
+        return;
+      }
       const body = reply.sent ? reply.body : returned;
       sendResponse(outgoing, reply.statusCode, body, reply.headers);
     } catch (error) {

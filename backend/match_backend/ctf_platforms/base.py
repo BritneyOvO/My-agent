@@ -42,7 +42,7 @@ class CTFPlatformClient(ABC):
         """Return current authenticated user/profile."""
 
     @abstractmethod
-    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None) -> Any:
+    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None, public: bool | None = None) -> Any:
         """List contests/games/competitions."""
 
     @abstractmethod
@@ -74,6 +74,14 @@ class CTFPlatformClient(ABC):
     @abstractmethod
     def submit_flag(self, challenge_id: str | int, flag: str, contest_id: str | int | None = None) -> Any:
         """Submit a flag and return the platform result."""
+
+    def start_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
+        """Start/open a challenge target instance and return connection info."""
+        raise self.unsupported("start_target", "platform adapter has not implemented target startup")
+
+    def close_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
+        """Close/delete a challenge target instance."""
+        raise self.unsupported("close_target", "platform adapter has not implemented target shutdown")
 
     @abstractmethod
     def scoreboard(self, contest_id: str | int | None = None) -> Any:

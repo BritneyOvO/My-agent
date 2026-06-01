@@ -76,7 +76,7 @@ class CTFdPlatform(CTFPlatformClient):
     def current_user(self) -> dict[str, Any]:
         return to_plain(self.client.get_me())
 
-    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None) -> Any:
+    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None, public: bool | None = None) -> Any:
         raise self.unsupported("list_contests", "standard CTFd exposes a single challenge board")
 
     def get_contest(self, contest_id: str | int) -> Any:

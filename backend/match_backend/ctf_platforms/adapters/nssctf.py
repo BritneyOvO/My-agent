@@ -4,7 +4,7 @@ from typing import Any
 
 from ..base import CTFPlatformClient
 from ..models import Credentials, PlatformConfig, to_plain
-from ..normalize import annotate_contest_listing
+from ..normalize import annotate_contest_listing, merge_contest_listings
 from ..registry import register_platform
 
 DEFAULT_BASE_URL = "https://www.nssctf.cn"
@@ -82,9 +82,38 @@ class NSSCTFPlatform(CTFPlatformClient):
     def current_user(self) -> dict[str, Any]:
         return to_plain(self.client.current_user())
 
-    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None) -> Any:
-        filters = {"search": search} if search else None
-        return to_plain(annotate_contest_listing(self.client.list_contests(page=page, filters=filters), self.platform))
+    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None, public: bool | None = None) -> Any:
+        def contest_filters(contest_type: int) -> dict[str, Any]:
+            # NSSCTF /api/contest/list/{page}/ requires this shape.
+            # type=0 => public contests; type=1 => private contests.
+            return {
+                "name": search or "",
+                "type": contest_type,
+                "kind": 0,
+                "source": 0,
+            }
+
+        if public is True:
+            data = self.client.list_contests(page=page, filters=contest_filters(0))
+        elif public is False:
+            data = self.client.list_contests(page=page, filters=contest_filters(1))
+        else:
+            public_data: Any = {}
+            private_data: Any = {}
+            try:
+                public_data = self.client.list_contests(page=page, filters=contest_filters(0))
+            except Exception:
+                public_data = {}
+            try:
+                private_data = self.client.list_contests(page=page, filters=contest_filters(1))
+            except Exception:
+                private_data = {}
+            if public_data and private_data:
+                merged = merge_contest_listings(public_data, private_data)
+                data = {"contests": merged.get("items", []), "total": merged.get("total", 0)}
+            else:
+                data = public_data or private_data
+        return to_plain(annotate_contest_listing(data, self.platform))
 
     def get_contest(self, contest_id: str | int) -> Any:
         return to_plain(self.client.contest_info(int(contest_id)))
@@ -137,6 +166,16 @@ class NSSCTFPlatform(CTFPlatformClient):
         if contest_id is None:
             return to_plain(self.client.submit_problem_flag(int(challenge_id), flag))
         return to_plain(self.client.submit_flag(int(contest_id), int(challenge_id), flag))
+
+    def start_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
+        if contest_id is None:
+            return to_plain(self.client.open_problem_target(int(challenge_id)))
+        return to_plain(self.client.open_contest_target(int(contest_id), int(challenge_id)))
+
+    def close_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
+        if contest_id is None:
+            return to_plain(self.client.close_problem_target(int(challenge_id)))
+        return to_plain(self.client.close_contest_target(int(contest_id), int(challenge_id)))
 
     def scoreboard(self, contest_id: str | int | None = None) -> Any:
         if contest_id is None:

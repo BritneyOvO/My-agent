@@ -64,7 +64,7 @@ export function parseScopeYaml(text: string) {
 
 export function parseToolRegistryYaml(text: string) {
   const result: {
-    tools: Record<string, { command: string[]; risk?: string; requires_scope?: boolean; timeout?: number }>;
+    tools: Record<string, { command: string[]; risk?: string; requires_target?: boolean; timeout?: number }>;
   } = { tools: {} };
   let inTools = false;
   let currentTool: string | null = null;
@@ -98,8 +98,8 @@ export function parseToolRegistryYaml(text: string) {
       }
       if (key === "command") {
         tool.command = Array.isArray(value) ? value.map(String) : [String(value)];
-      } else if (key === "requires_scope") {
-        tool.requires_scope = Boolean(value);
+      } else if (key === "requires_target") {
+        tool.requires_target = Boolean(value);
       } else if (key === "timeout") {
         tool.timeout = Number(value);
       } else if (key === "risk") {

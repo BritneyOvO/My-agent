@@ -5,7 +5,8 @@
   "description": "TypeScript workspace for the z3gh0ne hub/backend refactor.",
   "workspaces": [
     "backend",
-    "product"
+    "product",
+    "frontend"
   ],
   "scripts": {
     "dev": "npm run dev --workspace backend",
@@ -14,7 +15,10 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "smoke": "npm run smoke --workspace backend",
     "match:test": "cd backend/match_backend && python3 -m unittest -v",
-    "match:api": "cd backend/match_backend && python3 -m ctf_platforms.server"
+    "match:api": "cd backend/match_backend && python3 -m ctf_platforms.server",
+    "frontend:dev": "npm run dev --workspace frontend",
+    "frontend:build": "npm run build --workspace frontend",
+    "frontend:preview": "npm run preview --workspace frontend"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

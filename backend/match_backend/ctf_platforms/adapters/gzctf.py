@@ -51,7 +51,7 @@ class GZCTFPlatform(CTFPlatformClient):
     def current_user(self) -> dict[str, Any]:
         return to_plain(self.client._verify_login())
 
-    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None) -> Any:
+    def list_contests(self, page: int = 1, page_size: int = 50, search: str | None = None, public: bool | None = None) -> Any:
         data = self.client.list_games(count=page_size, skip=max(page - 1, 0) * page_size)
         if search and isinstance(data, dict):
             needle = search.lower()
@@ -111,6 +111,17 @@ class GZCTFPlatform(CTFPlatformClient):
         if contest_id is None:
             raise ValueError("GZCTF submit_flag requires contest_id")
         return to_plain(self.client.submit_flag(int(contest_id), int(challenge_id), flag))
+
+
+    def start_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
+        if contest_id is None:
+            raise ValueError("GZCTF start_target requires contest_id")
+        return to_plain(self.client.open_challenge_container(int(contest_id), int(challenge_id)))
+
+    def close_target(self, challenge_id: str | int, contest_id: str | int | None = None) -> Any:
+        if contest_id is None:
+            raise ValueError("GZCTF close_target requires contest_id")
+        return to_plain(self.client.close_challenge_container(int(contest_id), int(challenge_id)))
 
     def scoreboard(self, contest_id: str | int | None = None) -> Any:
         raise self.unsupported("scoreboard", "not implemented by bundled GZCTF client")

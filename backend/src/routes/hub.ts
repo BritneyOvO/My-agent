@@ -4,11 +4,12 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { AppInstance } from "../server.js";
 import { env } from "../lib/env.js";
-import { ensureDir } from "../lib/fs.js";
+import { ensureDir, writeJsonFile } from "../lib/fs.js";
 import { HttpError, parseOrThrow } from "../lib/http.js";
+import { aiConfigPath, readAiConfig, redactAiConfig, type StoredAiApiConfig } from "../lib/ai-config.js";
 import { requireToken } from "../core/auth.js";
 import { audit } from "../core/audit.js";
-import { channels, hubMessageSchema } from "../types/hub.js";
+import { aiApiConfigSchema, channels, hubMessageSchema } from "../types/hub.js";
 
 export function registerHubRoutes(app: AppInstance) {
   app.get("/hub/info", async (request) => {
@@ -47,6 +48,32 @@ export function registerHubRoutes(app: AppInstance) {
     }
 
     return { channels: result };
+  });
+
+  app.get("/hub/ai-config", async (request) => {
+    requireToken(request);
+    return redactAiConfig(await readAiConfig());
+  });
+
+  app.patch("/hub/ai-config", async (request) => {
+    const user = requireToken(request);
+    const next = parseOrThrow(aiApiConfigSchema, request.body);
+    const current = await readAiConfig();
+    const stored: StoredAiApiConfig = {
+      ...next,
+      api_key: next.api_key ?? current.api_key ?? "",
+      updated_at: new Date().toISOString()
+    };
+    await writeJsonFile(aiConfigPath(), stored);
+    await audit("hub_ai_config_update", {
+      user,
+      provider: stored.provider,
+      base_url: stored.base_url,
+      model: stored.model,
+      reasoning_effort: stored.reasoning_effort ?? "default",
+      api_key_set: Boolean(stored.api_key)
+    });
+    return redactAiConfig(stored);
   });
 
   app.post("/hub/messages", async (request) => {

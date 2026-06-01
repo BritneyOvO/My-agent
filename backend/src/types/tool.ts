@@ -2,6 +2,7 @@ export type ToolRunRequest = {
   tool: string;
   mode: string;
   target?: string;
+  task_id?: string;
   artifact_path?: string;
   args: string[];
 };
@@ -11,12 +12,16 @@ export const toolRunRequestSchema = {
     const body = requireObject(input);
     const tool = readString(body.tool, "tool", 1, 80);
     const mode = readString(body.mode ?? "local_lab", "mode", 1, 120);
-    const target = readOptionalString(body.target, "target", 1, 4000);
-    const artifactPath = readOptionalString(body.artifact_path, "artifact_path", 1, 260);
-    const args = readStringArray(body.args ?? [], "args", 8, 500);
+    const target = readOptionalString(body.target, "target", 1, 50000);
+    const taskId = readOptionalString(body.task_id, "task_id", 1, 120);
+    const artifactPath = readOptionalString(body.artifact_path, "artifact_path", 1, 50000);
+    const args = readStringArray(body.args ?? [], "args", 256, 200000);
     const result: ToolRunRequest = { tool, mode, args };
     if (target !== undefined) {
       result.target = target;
+    }
+    if (taskId !== undefined) {
+      result.task_id = taskId;
     }
     if (artifactPath !== undefined) {
       result.artifact_path = artifactPath;
