@@ -1,6 +1,16 @@
+import path from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
+
 const port = Number.parseInt(process.env.PORT ?? "18080", 10);
 const token = process.env.Z3GH0NE_ADMIN_TOKEN ?? "test-token";
+const smokeDataDir = await mkdtemp(path.join(tmpdir(), "z3gh0ne-smoke-"));
 process.env.Z3GH0NE_ADMIN_TOKEN = token;
+process.env.Z3GH0NE_DISABLE_AUTO_EXECUTE = "1";
+process.env.Z3GH0NE_DATA_DIR = smokeDataDir;
+process.env.Z3GH0NE_LOG_DIR = path.join(smokeDataDir, "logs");
+process.env.Z3GH0NE_UPLOADS_DIR = path.join(smokeDataDir, "uploads");
+process.env.Z3GH0NE_WORKSPACES_DIR = path.join(smokeDataDir, "workspaces");
 
 const { env } = await import("./lib/env.js");
 const { buildServer } = await import("./server.js");
@@ -22,6 +32,10 @@ try {
     status: "running",
     comment: "started"
   });
+  await patchJson(`${base}/tasks/${task.task_id}/status`, auth, {
+    status: "completed",
+    comment: "smoke cleanup"
+  });
 
   console.log(JSON.stringify({
     healthOk: health.ok,
@@ -33,6 +47,7 @@ try {
   }));
 } finally {
   await server.close();
+  await rm(smokeDataDir, { recursive: true, force: true });
 }
 
 async function getJson(url: string, headers?: Record<string, string>) {

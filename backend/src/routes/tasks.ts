@@ -184,9 +184,12 @@ function buildRetryPrompt(task: StoredTask, originalPrompt: string, retryPrompt:
 }
 
 export function registerTaskRoutes(app: AppInstance) {
-  void recoverActiveTasks().catch((error) => {
-    console.error("task recovery failed", error);
-  });
+  const autoExecute = process.env.Z3GH0NE_DISABLE_AUTO_EXECUTE !== "1";
+  if (autoExecute) {
+    void recoverActiveTasks().catch((error) => {
+      console.error("task recovery failed", error);
+    });
+  }
 
   app.post("/tasks", async (request) => {
     const user = requireToken(request);
@@ -204,7 +207,7 @@ export function registerTaskRoutes(app: AppInstance) {
     await saveTask(task);
     await audit("task_created", { user, task_id: task.task_id, mode: req.mode, target: req.target ?? null });
     publishTaskEvent(task.task_id, "task.created", { task });
-    scheduleTaskExecution(task.task_id, user);
+    if (autoExecute) scheduleTaskExecution(task.task_id, user);
     return task;
   });
 
@@ -401,7 +404,7 @@ export function registerTaskRoutes(app: AppInstance) {
     await saveTask(task);
     await audit("task_retry_requested", { user, task_id: taskId, from: oldStatus });
     publishTaskEvent(taskId, "task.retry", { task, from: oldStatus, prompt: req.prompt });
-    scheduleTaskExecution(taskId, user);
+    if (autoExecute) scheduleTaskExecution(taskId, user);
     return task;
   });
 

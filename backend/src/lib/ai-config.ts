@@ -20,6 +20,12 @@ export function aiConfigPath() {
 export const aiProviders = ["openai", "anthropic", "deepseek"] as const;
 type AiProvider = (typeof aiProviders)[number];
 
+const defaultContextWindowByProvider: Record<AiProvider, number> = {
+  openai: 128_000,
+  anthropic: 200_000,
+  deepseek: 64_000
+};
+
 function normalizeProvider(value: string | undefined): AiProvider {
   const provider = String(value || "openai").toLowerCase();
   if (provider === "anthropic" || provider === "claude" || provider === "antor") return "anthropic";
@@ -74,7 +80,8 @@ export function redactAiConfig(config: StoredAiApiConfig) {
     reasoning_effort: config.reasoning_effort ?? "default",
     organization: config.organization ?? "",
     api_key_set: Boolean(config.api_key),
-    updated_at: config.updated_at ?? null
+    updated_at: config.updated_at ?? null,
+    context_policy: modelContextPolicy(config)
   };
 }
 
@@ -104,6 +111,7 @@ export type AiStreamEvent = {
 
 export type AiCompletionOptions = {
   stream?: boolean;
+  disableTools?: boolean;
   onStreamEvent?: (event: AiStreamEvent) => void | Promise<void>;
 };
 
@@ -125,6 +133,12 @@ export type AiToolLoopState = {
   responsesInput: unknown[];
   anthropicMessages: unknown[];
   chatMessages: unknown[];
+  compaction?: {
+    failures: number;
+    summaries: string[];
+    events: Record<string, unknown>[];
+    lastCompactedStep?: number;
+  };
 };
 
 const aiTimeoutMs = Number.parseInt(process.env.Z3GH0NE_AI_TIMEOUT_MS ?? "45000", 10);
@@ -144,6 +158,60 @@ function requireApiKey(config: StoredAiApiConfig) {
     throw new Error(`AI API 未配置 Key：provider=${config.provider}`);
   }
   return config.api_key;
+}
+
+function parsePositiveInt(value: string | undefined) {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function modelEnvKey(model: string) {
+  return `Z3GH0NE_CONTEXT_WINDOW_${model.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
+export function modelContextWindowTokens(config: Pick<StoredAiApiConfig, "provider" | "model">) {
+  const globalOverride = parsePositiveInt(process.env.Z3GH0NE_CONTEXT_WINDOW_TOKENS);
+  if (globalOverride) return globalOverride;
+
+  const model = String(config.model || "").toLowerCase();
+  const modelOverride = parsePositiveInt(process.env[modelEnvKey(model)]);
+  if (modelOverride) return modelOverride;
+
+  if (/gpt-5\.[12]-chat|gpt-5-chat/i.test(model)) return 128_000;
+  if (/gpt-5\.[45].*(?:mini|nano)|gpt-5.*(?:mini|nano)|gpt-5\.[12]|gpt-5(?:-|$)/i.test(model)) return 400_000;
+  if (/gpt-5\.[45]/i.test(model)) return 1_050_000;
+  if (/gpt-4\.1|gpt-4-1/i.test(model)) return 1_047_576;
+  if (/gpt-4o|gpt-4\.5|gpt-4-5|o1\b/i.test(model)) return 128_000;
+  if (/\bo3\b|o3-|o4-mini/i.test(model)) return 200_000;
+  if (/claude.*(?:sonnet|opus).*4\.6|claude.*4-6.*(?:sonnet|opus)|claude-(?:sonnet|opus)-4-6/i.test(model)) return 1_000_000;
+  if (/claude|sonnet|opus|haiku/i.test(model)) return 200_000;
+  if (/deepseek.*v4|deepseek-chat|deepseek-reasoner/i.test(model)) return 1_000_000;
+  if (/deepseek/i.test(model)) return 1_000_000;
+  if (/qwen.*(1m|1000k|million)/i.test(model)) return 1_000_000;
+  if (/qwen.*(235b|long|coder)/i.test(model)) return 128_000;
+
+  return defaultContextWindowByProvider[normalizeProvider(config.provider)];
+}
+
+export function modelContextPolicy(config: Pick<StoredAiApiConfig, "provider" | "model">) {
+  const windowTokens = modelContextWindowTokens(config);
+  const reservedBaseline = Math.min(20_000, Math.max(4_000, Math.floor(windowTokens * 0.1)));
+  const reservedCap = Math.max(0, Math.min(Math.floor(windowTokens * 0.25), windowTokens - 1));
+  const reservedOutputTokens = Math.min(reservedBaseline, reservedCap);
+  const effectiveWindowTokens = Math.max(1, windowTokens - reservedOutputTokens);
+  const bufferBaseline = Math.min(16_000, Math.max(4_000, Math.floor(effectiveWindowTokens * 0.12)));
+  const bufferCap = Math.max(0, Math.min(Math.floor(effectiveWindowTokens * 0.25), effectiveWindowTokens - 1));
+  const bufferTokens = Math.min(bufferBaseline, bufferCap);
+  const autoCompactThresholdTokens = Math.max(1, effectiveWindowTokens - bufferTokens);
+  return {
+    model: config.model,
+    provider: normalizeProvider(config.provider),
+    windowTokens,
+    reservedOutputTokens,
+    effectiveWindowTokens,
+    autoCompactThresholdTokens
+  };
 }
 
 export function createAiToolLoopState(prompt: string, system: string): AiToolLoopState {
@@ -613,7 +681,7 @@ async function runOpenAIResponses(
   const apiKey = requireApiKey(config);
   let lastError: unknown = null;
   for (const url of responseEndpointCandidates(config.base_url)) {
-    for (const includeTools of [true, false]) {
+    for (const includeTools of (options.disableTools ? [false] : [true, false])) {
       try {
         if (state) repairMissingResponsesToolOutputs(state);
         const baseBody = withReasoningEffort(config, {
@@ -765,7 +833,15 @@ async function runChatCompletions(
         "Content-Type": "application/json",
         ...(config.organization ? { "OpenAI-Organization": config.organization } : {})
       },
-      body: JSON.stringify(withAiTools(withReasoningEffort(config, {
+      body: JSON.stringify(options.disableTools ? withReasoningEffort(config, {
+        model: config.model,
+        max_tokens: maxTokens,
+        messages: [
+          { role: "system", content: system },
+          ...(state ? state.chatMessages : [{ role: "user", content: prompt }])
+        ],
+        ...(options.stream ? { stream: true } : {})
+      }, "chat") : withAiTools(withReasoningEffort(config, {
         model: config.model,
         max_tokens: maxTokens,
         messages: [
@@ -871,7 +947,13 @@ async function runAnthropic(
       "anthropic-version": "2023-06-01",
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(withAiTools({
+    body: JSON.stringify(options.disableTools ? {
+      model: config.model,
+      max_tokens: maxTokens,
+      system,
+      messages: state ? state.anthropicMessages : [{ role: "user", content: prompt }],
+      ...(options.stream ? { stream: true } : {})
+    } : withAiTools({
       model: config.model,
       max_tokens: maxTokens,
       system,

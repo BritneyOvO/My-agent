@@ -7,6 +7,7 @@ import { appendAiToolResults, appendAiUserMessage, createAiToolLoopState, getAiT
 import { ToolDispatcher } from "../tools/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { ToolRunRequest } from "../types/tool.js";
+import { isContextLengthAiError, maybeCompactAiContext } from "./context-manager.js";
 import { publishTaskEvent } from "./task-events.js";
 
 type TaskHistoryEntry = {
@@ -577,6 +578,7 @@ async function persistProgress(taskId: string, by: string, partial: {
   aiToolRequest: string;
   usage: Record<string, unknown>[];
   nativeTranscript?: unknown;
+  compactionEvents?: Record<string, unknown>[];
 }) {
   const latest = await loadTask(taskId);
   const previousResult = latest.result && typeof latest.result === "object" ? latest.result : {};
@@ -590,6 +592,7 @@ async function persistProgress(taskId: string, by: string, partial: {
     raw_tool_request_response: partial.rawResponses.at(-1) ?? null,
     raw_responses: partial.rawResponses,
     native_tool_loop: partial.nativeTranscript ?? null,
+    context_compaction_events: partial.compactionEvents ?? previousResult.context_compaction_events ?? [],
     agent_steps: partial.steps,
     tool_calls: partial.toolCalls,
     usage: mergeUsage(partial.usage),
@@ -703,13 +706,44 @@ export async function executeTask(taskId: string, by = "agent-hub") {
     let model = config.model;
     let finalText = "";
     let finalFlags: string[] = [];
-    const toolLoop = createAiToolLoopState(buildPrompt(task), systemPrompt());
+    const taskPrompt = buildPrompt(task);
+    const toolLoop = createAiToolLoopState(taskPrompt, systemPrompt());
     let awaitingFinalReview = false;
 
     let step = 1;
     while (true) {
       if (await shouldStopExecution(taskId)) {
         return await loadTask(taskId);
+      }
+
+      const compactResult = await maybeCompactAiContext({
+        config,
+        state: toolLoop,
+        taskPrompt,
+        steps
+      });
+      if (compactResult.compacted) {
+        await persistActivity(taskId, {
+          phase: "context_compacted",
+          step,
+          provider,
+          model,
+          message: "上下文接近当前模型窗口，已自动压缩旧步骤。",
+          compaction: compactResult.event
+        });
+        await persistProgress(taskId, by, {
+          provider,
+          model,
+          startedAt,
+          steps,
+          toolCalls: allToolCalls,
+          rawResponses,
+          aiFunctionToolCalls,
+          aiToolRequest: lastAiToolRequest,
+          usage: usages,
+          nativeTranscript: getAiToolLoopTranscript(toolLoop),
+          compactionEvents: toolLoop.compaction?.events ?? []
+        });
       }
 
       let completion: AiCompletionResult | null = null;
@@ -762,6 +796,40 @@ export async function executeTask(taskId: string, by = "agent-hub") {
         } catch (error) {
           lastAiError = error;
           aiErrors.push(aiErrorMessage(error));
+          if (isContextLengthAiError(error)) {
+            await persistActivity(taskId, {
+              phase: "context_compacting",
+              step,
+              provider,
+              model,
+              attempt,
+              message: "AI 返回上下文超限，正在按当前模型窗口压缩旧步骤后重试。",
+              last_error: aiErrorMessage(error)
+            });
+            const reactiveCompact = await maybeCompactAiContext({
+              config,
+              state: toolLoop,
+              taskPrompt,
+              steps,
+              force: true
+            });
+            if (reactiveCompact.compacted) {
+              await persistProgress(taskId, by, {
+                provider,
+                model,
+                startedAt,
+                steps,
+                toolCalls: allToolCalls,
+                rawResponses,
+                aiFunctionToolCalls,
+                aiToolRequest: lastAiToolRequest,
+                usage: usages,
+                nativeTranscript: getAiToolLoopTranscript(toolLoop),
+                compactionEvents: toolLoop.compaction?.events ?? []
+              });
+              continue;
+            }
+          }
           if (!isRetryableAiError(error)) {
             throw new Error(`AI 请求失败（不可重试）：${aiErrorMessage(error)}`);
           }
@@ -818,7 +886,8 @@ export async function executeTask(taskId: string, by = "agent-hub") {
           aiFunctionToolCalls,
           aiToolRequest: lastAiToolRequest,
           usage: usages,
-          nativeTranscript: getAiToolLoopTranscript(toolLoop)
+          nativeTranscript: getAiToolLoopTranscript(toolLoop),
+          compactionEvents: toolLoop.compaction?.events ?? []
         });
         step += 1;
         continue;
@@ -847,7 +916,8 @@ export async function executeTask(taskId: string, by = "agent-hub") {
         aiFunctionToolCalls,
         aiToolRequest: lastAiToolRequest,
         usage: usages,
-        nativeTranscript: getAiToolLoopTranscript(toolLoop)
+        nativeTranscript: getAiToolLoopTranscript(toolLoop),
+        compactionEvents: toolLoop.compaction?.events ?? []
       });
 
       for (const request of toolRequests) {
@@ -891,7 +961,8 @@ export async function executeTask(taskId: string, by = "agent-hub") {
           aiFunctionToolCalls,
           aiToolRequest: lastAiToolRequest,
           usage: usages,
-          nativeTranscript: getAiToolLoopTranscript(toolLoop)
+          nativeTranscript: getAiToolLoopTranscript(toolLoop),
+          compactionEvents: toolLoop.compaction?.events ?? []
         });
       }
 
@@ -925,7 +996,8 @@ export async function executeTask(taskId: string, by = "agent-hub") {
         aiFunctionToolCalls,
         aiToolRequest: lastAiToolRequest,
         usage: usages,
-        nativeTranscript: getAiToolLoopTranscript(toolLoop)
+        nativeTranscript: getAiToolLoopTranscript(toolLoop),
+        compactionEvents: toolLoop.compaction?.events ?? []
       });
 
       step += 1;
@@ -951,6 +1023,7 @@ export async function executeTask(taskId: string, by = "agent-hub") {
       raw_tool_request_response: rawResponses.at(-1) ?? null,
       raw_response: rawResponses.length <= 2 ? (rawResponses.length === 1 ? rawResponses[0] : { initial: rawResponses[0], final: rawResponses.at(-1) }) : { responses: rawResponses },
       raw_responses: rawResponses,
+      context_compaction_events: toolLoop.compaction?.events ?? [],
       native_tool_loop: getAiToolLoopTranscript(toolLoop),
       agent_steps: steps,
       tool_calls: allToolCalls,

@@ -261,6 +261,30 @@ function splitAdjacentJsonObjects(text: string) {
   return objects.length > 1 ? objects : [];
 }
 
+function timestampMs(value: unknown) {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const parsed = typeof value === "number" ? value : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatTokenCount(value: unknown) {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "-";
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(number >= 10_000_000 ? 0 : 2).replace(/\.?0+$/, "")}M`;
+  if (number >= 1_000) return `${(number / 1_000).toFixed(number >= 100_000 ? 0 : 1).replace(/\.?0+$/, "")}K`;
+  return String(Math.round(number));
+}
+
 export default function App() {
   const initialRoute = parseRoute();
   const [tab, setTab] = createSignal<Tab>(initialRoute.tab);
@@ -277,8 +301,8 @@ export default function App() {
   const [tasks, setTasks] = createSignal<unknown[]>([]);
   const [selectedTaskDetail, setSelectedTaskDetail] = createSignal<unknown>(null);
   const [selectedTaskDetailId, setSelectedTaskDetailId] = createSignal("");
-  const [taskStreamStatus, setTaskStreamStatus] = createSignal("未连接");
   const [assistantStreamText, setAssistantStreamText] = createSignal("");
+  const [nowMs, setNowMs] = createSignal(Date.now());
   const [retryTaskId, setRetryTaskId] = createSignal("");
   const [retryPrompt, setRetryPrompt] = createSignal("");
   const [tools, setTools] = createSignal<unknown[]>([]);
@@ -385,6 +409,7 @@ export default function App() {
     const value = aiApiStatus();
     if (!value || typeof value !== "object") return null;
     const record = value as Record<string, unknown>;
+    const contextPolicy = asRecord(record.context_policy);
     return {
       provider: String(record.provider ?? "未读取"),
       baseUrl: String(record.base_url ?? "未读取"),
@@ -392,9 +417,21 @@ export default function App() {
       reasoningEffort: String(record.reasoning_effort ?? "default"),
       organization: String(record.organization ?? ""),
       apiKeySet: Boolean(record.api_key_set),
-      updatedAt: String(record.updated_at ?? "")
+      updatedAt: String(record.updated_at ?? ""),
+      contextWindow: contextPolicy.windowTokens,
+      contextThreshold: contextPolicy.autoCompactThresholdTokens,
+      contextEffective: contextPolicy.effectiveWindowTokens,
+      reservedOutput: contextPolicy.reservedOutputTokens
     };
   });
+  const taskElapsedText = (task: Record<string, unknown>) => {
+    const started = timestampMs(task.started_at) ?? timestampMs(task.created_at);
+    if (!started) return "-";
+    const status = String(task.status ?? "").toLowerCase();
+    const finished = timestampMs(task.completed_at) ?? timestampMs(task.failed_at) ?? timestampMs(asRecord(task.result).completed_at) ?? timestampMs(asRecord(task.result).failed_at);
+    const end = status === "completed" || status === "failed" ? (finished ?? timestampMs(task.updated_at) ?? nowMs()) : nowMs();
+    return formatElapsed(end - started);
+  };
 
   function applyRoute(route: RouteState) {
     setTab(route.tab);
@@ -447,6 +484,7 @@ export default function App() {
   }
 
   onMount(() => {
+    const clock = window.setInterval(() => setNowMs(Date.now()), 1000);
     if (globalThis.location.pathname === "/") {
       globalThis.history.replaceState(null, "", routePath(initialRoute));
     }
@@ -457,7 +495,10 @@ export default function App() {
       void restoreCtfRoute(route);
     };
     globalThis.addEventListener("popstate", onPopState);
-    onCleanup(() => globalThis.removeEventListener("popstate", onPopState));
+    onCleanup(() => {
+      window.clearInterval(clock);
+      globalThis.removeEventListener("popstate", onPopState);
+    });
   });
 
   createEffect(() => {
@@ -515,9 +556,7 @@ export default function App() {
     void refresh();
     try {
       eventSource = new EventSource(hubUrl(`/tasks/${encodeURIComponent(taskId)}/events`, { token: config().adminToken }));
-      setTaskStreamStatus("SSE 连接中");
       eventSource.onopen = () => {
-        setTaskStreamStatus("SSE 已连接");
         if (fallbackTimer !== undefined) {
           clearInterval(fallbackTimer);
           fallbackTimer = undefined;
@@ -542,17 +581,14 @@ export default function App() {
           }
           if (eventName === "final" || eventName === "error" || eventName === "task.cancelled") {
             eventSource?.close();
-            setTaskStreamStatus(`SSE 已结束: ${eventName}`);
           }
         });
       }
       eventSource.onerror = () => {
-        setTaskStreamStatus("SSE 断开，已回退轮询");
         eventSource?.close();
         startFallbackPolling();
       };
     } catch {
-      setTaskStreamStatus("SSE 不可用，已回退轮询");
       startFallbackPolling();
     }
 
@@ -1136,7 +1172,7 @@ export default function App() {
       <div class="bg-lines" />
       <header class="titlebar">
         <div class="brand">
-          <span class="brand-primary">z3</span><span>gh</span><span class="brand-muted">0</span><span>ne</span>
+          <span class="brand-primary">CTF</span>
           <span class="slash">::</span>
           <span>Platform Console</span>
           <span class="cursor">_</span>
@@ -1381,15 +1417,17 @@ export default function App() {
             <Show when={agentPage() === "workbench"}>
               <section class="kanban-shell">
                 <aside class="kanban-rail">
-                  <section class="panel glass kanban-panel">
+                  <section class="panel glass kanban-panel task-composer">
                     <div class="section-head">
                       <h2>新建任务</h2>
                       <span>Task</span>
                     </div>
-                    <SelectField label="模式" value={taskDraft().mode} options={["ctf_challenge", "local_lab", "code_review", "log_analysis", "report_generation"] as const} onInput={(mode) => setTaskDraft({ ...taskDraft(), mode })} />
-                    <SelectField label="优先级" value={taskDraft().priority} options={["low", "medium", "high", "critical"] as const} onInput={(priority) => setTaskDraft({ ...taskDraft(), priority })} />
-                    <Field label="目标" value={taskDraft().target} onInput={(target) => setTaskDraft({ ...taskDraft(), target })} placeholder="可选，例如 127.0.0.1" />
-                    <Field label="标签" value={taskDraft().tags} onInput={(tags) => setTaskDraft({ ...taskDraft(), tags })} />
+                    <div class="task-composer-grid">
+                      <SelectField label="模式" value={taskDraft().mode} options={["ctf_challenge", "local_lab", "code_review", "log_analysis", "report_generation"] as const} onInput={(mode) => setTaskDraft({ ...taskDraft(), mode })} />
+                      <SelectField label="优先级" value={taskDraft().priority} options={["low", "medium", "high", "critical"] as const} onInput={(priority) => setTaskDraft({ ...taskDraft(), priority })} />
+                      <Field label="目标" value={taskDraft().target} onInput={(target) => setTaskDraft({ ...taskDraft(), target })} placeholder="可选，例如 127.0.0.1" />
+                      <Field label="标签" value={taskDraft().tags} onInput={(tags) => setTaskDraft({ ...taskDraft(), tags })} />
+                    </div>
                     <label class="field"><span>Prompt / 消息</span><textarea value={taskDraft().prompt} onInput={(e) => setTaskDraft({ ...taskDraft(), prompt: e.currentTarget.value })} /></label>
                     <div class="button-row">
                       <button class="primary" onClick={createTask} disabled={busy() || !authReady()}>创建任务</button>
@@ -1405,16 +1443,6 @@ export default function App() {
                 </aside>
 
                 <main class="kanban-board">
-                  <div class="kanban-board-head">
-                    <div>
-                      <p class="eyebrow">Agent Hub</p>
-                      <h2>任务看板</h2>
-                      <p class="hint">任务按状态分列展示，点击任务卡片查看 AI 返回、解题步骤和工具调用详情。</p>
-                    </div>
-                    <div class="button-row">
-                      <button class="primary" onClick={refreshHub} disabled={busy() || !authReady()}>刷新看板</button>
-                    </div>
-                  </div>
                   <div class="kanban-columns">
                     <For each={taskBoard()}>{(lane) => (
                       <section class={`kanban-column ${lane.tone}`}>
@@ -1448,7 +1476,7 @@ export default function App() {
                                 <Show when={task.result_summary}>
                                   <p class="kanban-result">{String(task.result_summary)}</p>
                                 </Show>
-                                <small>{String(task.mode ?? "unknown")} / {String(task.owner ?? "agent")} / {String(task.updated_at ?? task.created_at ?? "")}</small>
+                                <small>{String(task.mode ?? "unknown")} / {String(task.updated_at ?? task.created_at ?? "")}</small>
 	                                <div class="button-row">
 	                                  <button class="mini" onClick={(event) => { event.stopPropagation(); void openTaskDetail(String(task.task_id)); }} disabled={busy()}>详情</button>
 	                                  <button class="mini primary" onClick={(event) => { event.stopPropagation(); void completeTask(String(task.task_id)); }} disabled={busy() || lane.key === "completed" || lane.key === "failed"}>完成</button>
@@ -1490,6 +1518,8 @@ export default function App() {
                         <div class="mini-status"><span class="led ok" /><span>Provider：{summary().provider}</span></div>
                         <div class="mini-status"><span class="led ok" /><span>Model：{summary().model}</span></div>
                         <div class="mini-status"><span class="led ok" /><span>思考深度：{summary().reasoningEffort}</span></div>
+                        <div class="mini-status"><span class="led ok" /><span>Context：{formatTokenCount(summary().contextWindow)} / 自动压缩 {formatTokenCount(summary().contextThreshold)}</span></div>
+                        <div class="mini-status"><span class="led ok" /><span>预留输出：{formatTokenCount(summary().reservedOutput)}；有效窗口：{formatTokenCount(summary().contextEffective)}</span></div>
                         <div class="mini-status"><span class="led ok" /><span>Base URL：{summary().baseUrl}</span></div>
                         <Show when={summary().organization}>
                           <div class="mini-status"><span class="led ok" /><span>Organization：{summary().organization}</span></div>
@@ -1516,7 +1546,19 @@ export default function App() {
 	                const result = () => asRecord(task().result);
 	                const activity = () => asRecord(result().current_activity);
 	                const agentSteps = () => Array.isArray(result().agent_steps) ? result().agent_steps as Record<string, unknown>[] : [];
+	                const compactionEvents = () => Array.isArray(result().context_compaction_events) ? result().context_compaction_events as Record<string, unknown>[] : [];
 	                const history = () => Array.isArray(task().history) ? task().history as Record<string, unknown>[] : [];
+	                const timeline = () => {
+	                  const items: Record<string, unknown>[] = [
+	                    ...agentSteps().map((step, index) => ({ type: "step", ts: String(step.ts ?? ""), order: index, payload: step })),
+	                    ...history().map((item, index) => ({ type: "history", ts: String(item.ts ?? ""), order: agentSteps().length + index, payload: item }))
+	                  ];
+	                  return items.sort((a, b) => {
+	                    const left = timestampMs(a.ts) ?? 0;
+	                    const right = timestampMs(b.ts) ?? 0;
+	                    return left - right || Number(a.order ?? 0) - Number(b.order ?? 0);
+	                  });
+	                };
                 return (
 	                  <div class="modal-backdrop" onClick={closeTaskDetail}>
 	                    <section class="modal-card glass task-modal" onClick={(event) => event.stopPropagation()}>
@@ -1540,7 +1582,7 @@ export default function App() {
                         <span><b>{String(task().mode ?? "-")}</b><small>模式</small></span>
                         <span><b>{String(task().priority ?? "-")}</b><small>优先级</small></span>
                         <span><b>{String(task().updated_at ?? task().created_at ?? "-")}</b><small>更新时间</small></span>
-                        <span><b>{taskStreamStatus()}</b><small>会话流</small></span>
+                        <span><b>{taskElapsedText(task())}</b><small>已执行时间</small></span>
                       </div>
 
 	                      <section class="task-detail-section">
@@ -1601,26 +1643,62 @@ export default function App() {
                         </section>
                       </Show>
 
-                      <Show when={agentSteps().length || history().length}>
+                      <Show when={compactionEvents().length}>
                         <section class="task-detail-section">
                           <div class="section-head">
-                            <h3>Agent 解题步骤 / 历史记录</h3>
-                            <span>{agentSteps().length} steps</span>
+                            <h3>上下文压缩</h3>
+                            <span>{compactionEvents().length} compact</span>
                           </div>
-                          <Show when={agentSteps().length}>
-                            <div class="tool-call-list">
-                              <For each={agentSteps()}>{(step) => (
+                          <div class="task-timeline">
+                            <For each={compactionEvents()}>{(event) => (
+                              <article>
+                                <b>{String(event.trigger ?? "auto")}</b>
+                                <span>{formatTokenCount(event.pre_tokens_estimate)} → {formatTokenCount(event.post_tokens_estimate)}</span>
+                                <small>{String(event.ts ?? "")} / window {formatTokenCount(event.window_tokens)} / threshold {formatTokenCount(event.threshold_tokens)}</small>
+                                <p>summarized {String(event.summarized_steps ?? 0)} steps, kept {String(event.kept_steps ?? 0)} steps</p>
+                              </article>
+                            )}</For>
+                          </div>
+                        </section>
+                      </Show>
+
+                      <Show when={timeline().length}>
+                        <section class="task-detail-section">
+                          <div class="section-head">
+                            <h3>Agent 解题步骤</h3>
+                            <span>{agentSteps().length} steps / {history().length} history</span>
+                          </div>
+                          <div class="tool-call-list">
+                            <For each={timeline()}>{(entry) => {
+                              const payload = () => asRecord(entry.payload);
+                              return (
+                                <Show when={entry.type === "step"} fallback={
+                                  <article class="history-inline">
+                                    <div class="section-head">
+                                      <div>
+                                        <b>History {String(payload().action ?? "-")}</b>
+                                        <small>{String(payload().ts ?? "")}</small>
+                                      </div>
+                                      <span>{String(payload().by ?? "system")}</span>
+                                    </div>
+                                    <p class="hint">{String(payload().from ?? "")}{payload().to ? ` -> ${String(payload().to)}` : ""}</p>
+                                    <Show when={payload().comment}><pre class="task-text">{String(payload().comment)}</pre></Show>
+                                  </article>
+                                }>
                                 <article>
                                   <div class="section-head">
                                     <div>
-                                      <b>Step {String(step.step ?? "-")}</b>
-                                      <small>{String(step.ts ?? "")}</small>
+                                      <b>Step {String(payload().step ?? "-")}</b>
+                                      <small>{String(payload().ts ?? "")}</small>
                                     </div>
-                                    <span>{Array.isArray(step.tool_calls) ? step.tool_calls.length : 0} tools</span>
+                                    {(() => {
+                                      const toolCalls = payload().tool_calls;
+                                      return <span>{Array.isArray(toolCalls) ? toolCalls.length : 0} tools</span>;
+                                    })()}
                                   </div>
                                   {(() => {
-                                    const rendered = extractStepSnippets(String(step.thought ?? ""));
-                                    const pairs = pairStepSnippets(rendered.snippets, stepToolOutputSnippets(step as Record<string, unknown>));
+                                    const rendered = extractStepSnippets(String(payload().thought ?? ""));
+                                    const pairs = pairStepSnippets(rendered.snippets, stepToolOutputSnippets(payload()));
                                     return (
                                       <>
                                         <Show when={rendered.text}>
@@ -1643,33 +1721,15 @@ export default function App() {
                                       </>
                                     );
                                   })()}
-                                  <Show when={step.analysis}>
-                                    <p class="hint">{String(step.analysis)}</p>
+                                  <Show when={payload().analysis}>
+                                    <p class="hint">{String(payload().analysis)}</p>
                                   </Show>
                                 </article>
-                              )}</For>
-                            </div>
-                          </Show>
-                          <Show when={history().length}>
-                            <div class="merged-history">
-                              <h4>历史记录</h4>
-                              <div class="task-timeline">
-                                <For each={history()}>{(item) => (
-                                  <article>
-                                    <b>{String(item.action ?? "-")}</b>
-                                    <span>{String(item.from ?? "")}{item.to ? ` → ${String(item.to)}` : ""}</span>
-                                    <small>{String(item.ts ?? "")} / {String(item.by ?? "")}</small>
-                                    <Show when={item.comment}><p>{String(item.comment)}</p></Show>
-                                  </article>
-                                )}</For>
-                              </div>
-                            </div>
-                          </Show>
+                                </Show>
+                              );
+                            }}</For>
+                          </div>
                         </section>
-                      </Show>
-
-                      <Show when={result().raw_response}>
-                        <TerminalPanel title="AI raw response" value={result().raw_response} level="ok" />
                       </Show>
 
                     </section>

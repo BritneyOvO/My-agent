@@ -203,15 +203,24 @@ button.danger { color: #9c1c36; border-color: rgba(224,49,84,.28); }
 
 .kanban-shell {
   display: grid;
-  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
 .kanban-rail {
   display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, .8fr);
   gap: 18px;
   align-content: start;
 }
+.task-composer-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.task-composer .field { margin-bottom: 10px; }
+.task-composer textarea { min-height: 92px; }
+.kanban-panel .terminal-card pre { max-height: 172px; }
 .kanban-board {
   min-width: 0;
   display: grid;
@@ -434,6 +443,12 @@ button.danger { color: #9c1c36; border-color: rgba(224,49,84,.28); }
   padding: 12px;
 }
 .tool-call-list small { display: block; color: var(--muted); margin-top: 3px; }
+.history-inline {
+  border-color: rgba(101,115,134,.2)!important;
+  background: rgba(101,115,134,.06)!important;
+}
+.history-inline .section-head { margin-bottom: 4px; }
+.history-inline .task-text { max-height: 180px; }
 
 .terminal-card { border: 1px solid var(--line); border-radius: 20px; background: rgba(255,255,255,.62); overflow: hidden; box-shadow: inset 0 1px 0 rgba(255,255,255,.8); }
 .terminal-title { height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.68); }
@@ -457,7 +472,8 @@ button.danger { color: #9c1c36; border-color: rgba(224,49,84,.28); }
   .platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 1380px) {
-  .kanban-shell { grid-template-columns: 1fr; }
+  .kanban-rail { grid-template-columns: 1fr; }
+  .task-composer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 980px) {
   .layout { grid-template-columns: 1fr; }
@@ -465,7 +481,6 @@ button.danger { color: #9c1c36; border-color: rgba(224,49,84,.28); }
   .grid.two, .action-panel { grid-template-columns: 1fr; }
   .hero { flex-direction: column; align-items: flex-start; }
   .platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .kanban-rail { grid-template-columns: 1fr; }
   .kanban-board-head { flex-direction: column; align-items: stretch; }
   .kanban-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kanban-column { min-height: auto; }
@@ -474,6 +489,7 @@ button.danger { color: #9c1c36; border-color: rgba(224,49,84,.28); }
   .challenge-stats { grid-template-columns: 1fr; }
   .titlebar { align-items: flex-start; flex-direction: column; }
   .platform-grid, .button-grid { grid-template-columns: 1fr; }
+  .task-composer-grid { grid-template-columns: 1fr; }
   .kanban-columns { grid-template-columns: 1fr; }
   .task-detail-head { align-items: flex-start; flex-direction: column; }
   .task-meta-grid, .task-meta-grid.compact { grid-template-columns: 1fr; }
